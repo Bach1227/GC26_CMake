@@ -251,4 +251,9 @@ SECTIONS
     libgcc.a:* ( * )
   }
 
+  .RAM_D1 :
+  {
+      *(.RAM_D1)
+  } >RAM_D1
+
 }

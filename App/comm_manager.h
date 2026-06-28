@@ -23,9 +23,12 @@ extern "C" {
 
 extern uint8_t       dma_rx_buf[256];
 
+void Comm_OnUartError(void);                       /* ISR → set flag, notify task */
 void Comm_Init(void);
 void Comm_InitTask(void);
 void Comm_OnUartIdle(uint16_t received_size);
+uint16_t Comm_Depack(uint16_t total_len);
+void Comm_RestartRx(void);
 
 /* ---- 发送 ---- */
 

@@ -21,7 +21,7 @@ static uint16_t Protocol_BuildFrame(uint8_t seq, uint8_t type, uint8_t cmd,
                                     const uint8_t *payload, uint16_t len,
                                     uint8_t *out, uint16_t out_size)
 {
-    uint16_t frame_len = PROTOCOL_MIN_FRAME_LEN + len; /* Header(2) + ... + 校验和(2) + payload */
+    uint16_t frame_len = PROTOCOL_MIN_FRAME_LEN + len; /* Header(2) + ... + 校验和(1) + payload */
 
     if (out_size < frame_len || out == NULL)
     {
@@ -34,8 +34,7 @@ static uint16_t Protocol_BuildFrame(uint8_t seq, uint8_t type, uint8_t cmd,
     out[idx++] = seq;
     out[idx++] = type;
     out[idx++] = cmd;
-    out[idx++] = (uint8_t)(len & 0xFFu);              /* LEN LO */
-    out[idx++] = (uint8_t)((len >> 8) & 0xFFu);       /* LEN HI */
+    out[idx++] = (uint8_t)(len & 0xFFu);              /* LEN */
 
     if (payload != NULL && len > 0)
     {
@@ -43,11 +42,10 @@ static uint16_t Protocol_BuildFrame(uint8_t seq, uint8_t type, uint8_t cmd,
         idx += len;
     }
 
-    /* 校验和: 覆盖 out[2..idx-1] (SEQ..PAYLOAD) */
-    uint16_t ck = 0;
-    for (uint16_t i = 2; i < idx; i++) ck += out[i];
-    out[idx++] = (uint8_t)(ck & 0xFFu);
-    out[idx++] = (uint8_t)((ck >> 8) & 0xFFu);
+    /* 校验和: SUM(out[2..idx-1]), 截断为 8-bit */
+    uint8_t checksum = 0;
+    for (uint16_t i = 2; i < idx; i++) checksum += out[i];
+    out[idx++] = checksum;
 
     return idx;
 }
@@ -160,16 +158,14 @@ uint16_t Protocol_ParseBuffer(const segment_t seg[2])
         if (*p != PROTOCOL_FRAME_HEADER_1) continue;
         ADVANCE();
 
-        /* ---- 3. SEQ TYPE CMD LEN_LO LEN_HI ---- */
-        if (total - consumed < 5) { consumed = frame_start; break; }
+        /* ---- 3. SEQ TYPE CMD LEN ---- */
+        if (total - consumed < 4) { consumed = frame_start; break; }
 
-        uint8_t seq    = *p; ADVANCE();
-        uint8_t type   = *p; ADVANCE();
-        uint8_t cmd    = *p; ADVANCE();
-        uint8_t len_lo = *p; ADVANCE();
-        uint8_t len_hi = *p; ADVANCE();
+        uint8_t seq = *p; ADVANCE();
+        uint8_t type = *p; ADVANCE();
+        uint8_t cmd  = *p; ADVANCE();
+        uint8_t len  = *p; ADVANCE();
 
-        uint16_t len = len_lo | ((uint16_t)len_hi << 8);
         if (len > PROTOCOL_MAX_PAYLOAD) continue;
 
         /* ---- 4. 检查帧是否完整 ---- */
@@ -180,25 +176,24 @@ uint16_t Protocol_ParseBuffer(const segment_t seg[2])
         }
 
         /* ---- 5. 校验和 ---- */
-        uint16_t ck = (uint16_t)seq + type + cmd + len_lo + len_hi;
+        uint8_t checksum = (uint8_t)(seq + type + cmd + len);
 
         const uint8_t *payload_ptr = p;
         for (uint16_t i = 0; i < len; i++) {
-            ck += *p;
+            checksum += *p;
             ADVANCE();
         }
 
-        uint8_t ck_lo = *p; ADVANCE();
-        uint8_t ck_hi = *p; ADVANCE();
+        uint8_t checksum_received = *p; ADVANCE();
 
         /* ---- 6. 校验通过 → 回调 ---- */
-        if (ck == (ck_lo | ((uint16_t)ck_hi << 8))) {
+        if (checksum == checksum_received) {
             ProtocolFrame_t frame;
             frame.seq         = seq;
             frame.type        = type;
             frame.cmd         = cmd;
             frame.len         = len;
-            frame.checksum    = ck;
+            frame.checksum    = checksum;
             frame.payload_ptr = payload_ptr;
             Protocol_Dispatch(&frame);
         }

@@ -3,15 +3,15 @@
   * @file           : protocol.h
   * @brief          : 工创通讯协议解析器
   *
-  * 帧格式: AA 55 | SEQ | TYPE | CMD | LEN(2B) | PAYLOAD(LEN bytes) | CHECKSUM(2B)
+  * 帧格式: AA 55 | SEQ | TYPE | CMD | LEN(1B) | PAYLOAD(LEN bytes) | CHECKSUM(1B)
   *
   *   - AA 55: 帧头 (2 bytes)
   *   - SEQ:   序列号 (1 byte), 用于 ACK 对账
   *   - TYPE:  消息类型 (1 byte) → MsgType_t
   *   - CMD:   命令字 (1 byte) → CmdCode_t / AckCode_t (由 TYPE 决定)
-  *   - LEN:   PAYLOAD 长度 (2 bytes, little-endian)
+  *   - LEN:   PAYLOAD 长度 (1 byte)
   *   - PAYLOAD: 可变长度数据
-  *   - CHECKSUM: 16-bit 算术和校验 (2 bytes, little-endian)
+  *   - CHECKSUM: 8-bit 算术和校验 (1 byte)
   *
   ******************************************************************************
   */
@@ -34,7 +34,7 @@ extern "C" {
 
 #define PROTOCOL_FRAME_HEADER_0  0xAAu
 #define PROTOCOL_FRAME_HEADER_1  0x55u
-#define PROTOCOL_MIN_FRAME_LEN   9u    /* 2 + SEQ(1) + TYPE(1) + CMD(1) + LEN(2) + CHECKSUM(2) */
+#define PROTOCOL_MIN_FRAME_LEN   7u    /* 2 + SEQ(1) + TYPE(1) + CMD(1) + LEN(1) + CHECKSUM(1) */
 #define PROTOCOL_MAX_PAYLOAD     255u
 
 /* ====================================================================== */
@@ -127,7 +127,7 @@ typedef struct {
     uint8_t  type;
     uint8_t  cmd;
     uint16_t len;
-    uint16_t checksum;
+    uint8_t  checksum;
 
     /* 零拷贝: 指向 seg 内部的 payload 首字节, 回调期间有效 */
     const uint8_t *payload_ptr;
