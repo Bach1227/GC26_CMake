@@ -1,5 +1,6 @@
 #include "bsp_zdt.h"
 #include "bsp_can.h"
+#include "cmsis_os2.h"
 
 static FDCAN_HandleTypeDef   *zdt_hfdcan   = &hfdcan1;
 static ZDT_MotorStatus_t      zdt_motors[ZDT_MAX_MOTORS];
@@ -25,6 +26,7 @@ static int ZDT_FindSlot(uint8_t addr)
         int slot = zdt_motor_cnt++;
         memset(&zdt_motors[slot], 0, sizeof(ZDT_MotorStatus_t));
         zdt_motors[slot].addr = addr;
+        zdt_motors[slot].move_done = false;
         return slot;
     }
     return -1;
@@ -75,6 +77,41 @@ void ZDT_OnRxMessage(uint32_t ext_id, const uint8_t *data, uint8_t dlc)
     default:
         break;
     }
+
+    /* 到位回传: data = [地址, FD, 9F, 校验]
+     * 地址已在 ext_id 中, data[0] 回显地址, data[1]=FD, data[2]=9F */
+    if (dlc >= 3 &&
+        data[0] == addr &&
+        data[1] == ZDT_FC_POSITION &&
+        data[2] == 0x9F)
+    {
+        st->move_done = true;
+    }
+}
+
+/* ---- 到位等待 / 标志清除 ---- */
+
+bool ZDT_WaitMoveDone(uint8_t addr, uint32_t timeout_ms)
+{
+    ZDT_MotorStatus_t *st = ZDT_GetStatus(addr);
+    if (st == NULL) return false;
+
+    uint32_t start = HAL_GetTick();
+    while (!st->move_done)
+    {
+        if (HAL_GetTick() - start >= timeout_ms)
+            return false;           /* 超时 */
+        osDelay(1);                 /* 让出 CPU */
+    }
+
+    st->move_done = false;          /* 自动清除, 供下一轮使用 */
+    return true;
+}
+
+void ZDT_ClearMoveDone(uint8_t addr)
+{
+    ZDT_MotorStatus_t *st = ZDT_GetStatus(addr);
+    if (st) st->move_done = false;
 }
 
 /* ---- commands ---- */

@@ -7,6 +7,7 @@ extern "C" {
 
 #include "stm32h7xx_hal.h"
 #include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
 
 /* Address range */
@@ -57,6 +58,7 @@ typedef struct {
     int32_t  prev_position;    /* 上一采样点脉冲 (ChassisControl 更新) */
     int16_t  velocity_rpm;     /* 当前转速 RPM (ChassisControl 更新) */
     uint32_t last_rx_tick;
+    bool     move_done;        /* 电机到位标志 (FD+9F 回传时置 true) */
 } ZDT_MotorStatus_t;
 
 /* API */
@@ -83,6 +85,12 @@ HAL_StatusTypeDef ZDT_SetPosition(uint8_t addr, uint8_t dir,
 
 HAL_StatusTypeDef ZDT_ReadPosition(uint8_t addr);
 HAL_StatusTypeDef ZDT_ReadStatus(uint8_t addr);
+
+/** 等待指定电机到位 (轮询 move_done, 超时返回 false) */
+bool ZDT_WaitMoveDone(uint8_t addr, uint32_t timeout_ms);
+
+/** 清除到位标志, 供下一轮移动前调用 */
+void ZDT_ClearMoveDone(uint8_t addr);
 
 #ifdef __cplusplus
 }

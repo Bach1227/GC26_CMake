@@ -28,6 +28,9 @@
 /* USER CODE BEGIN Includes */
 #include "ChassisControl.h"
 #include "comm_manager.h"
+#include "statemachine.h"
+#include "gimbal.h"
+#include "fdcan.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -98,8 +101,11 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  HAL_FDCAN_Start(&hfdcan1);          /* 启动 FDCAN1 */
   Chassis_TaskInit();
   Comm_InitTask();
+  Gimbal_InitTask();                  /* 启动云台电机 J4310 角度闭环 (1kHz PID) */
+  SM_Init();
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */

@@ -47,12 +47,16 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Bsp/bsp_can.c
     Bsp/bsp_zdt.c
+    Bsp/bsp_dm.c
     App/protocol.c
     App/MoveControl.c
     App/interrupthandle.c
     App/DataStructure.c
     App/comm_manager.c
     App/ChassisControl.c
+    App/statemachine.c
+    App/gimbal.c
+    App/PID.c
 )
 
 # Add include paths

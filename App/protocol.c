@@ -119,6 +119,13 @@ static void Protocol_Dispatch(const ProtocolFrame_t *frame)
             }
             break;
         }
+        case CMD_MOVE_ADJUST: {
+            MoveAdjust_t cmd;
+            if (UnpackMoveAdjust(frame->payload_ptr, frame->len, &cmd)) {
+                Chassis_SendMoveCmd(cmd.x, cmd.y, EVENT_NONE);
+            }
+            break;
+        }
         default:
             break;
         }
@@ -309,6 +316,28 @@ uint8_t UnpackEmergency(const uint8_t *data, uint16_t len, Emergency_t *cmd)
     return 1u;
 }
 
+uint16_t PackMoveAdjust(const MoveAdjust_t *cmd, uint8_t *out, uint16_t out_size)
+{
+    if (cmd == NULL || out == NULL || out_size < 4) return 0;
+
+    out[0] = (uint8_t)(cmd->x & 0xFFu);
+    out[1] = (uint8_t)((cmd->x >> 8) & 0xFFu);
+    out[2] = (uint8_t)(cmd->y & 0xFFu);
+    out[3] = (uint8_t)((cmd->y >> 8) & 0xFFu);
+
+    return 4;
+}
+
+uint8_t UnpackMoveAdjust(const uint8_t *data, uint16_t len, MoveAdjust_t *cmd)
+{
+    if (data == NULL || cmd == NULL || len < 4) return 0u;
+
+    cmd->x = (int16_t)(data[0] | ((uint16_t)data[1] << 8));
+    cmd->y = (int16_t)(data[2] | ((uint16_t)data[3] << 8));
+
+    return 1u;
+}
+
 uint8_t UnpackAckAck(const uint8_t *data, uint16_t len, AckAck_t *ack)
 {
     if (data == NULL || ack == NULL || len < 3) return 0u;
@@ -360,6 +389,8 @@ uint8_t Protocol_UnpackPayload(ProtocolFrame_t *frame)
             return UnpackGrasp(data, len, &frame->payload.grasp);
         case CMD_EMERGENCY:
             return UnpackEmergency(data, len, &frame->payload.emergency);
+        case CMD_MOVE_ADJUST:
+            return UnpackMoveAdjust(data, len, &frame->payload.move_adjust);
         default:
             return 0u; /* 未知 CMD */
         }

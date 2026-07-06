@@ -55,7 +55,8 @@ typedef enum {
 typedef enum {
     CMD_CAR_MOVE    = 0x01u,     /* 车移动 */
     CMD_GRASP       = 0x02u,     /* 抓取 */
-    CMD_EMERGENCY   = 0x03u      /* 紧急矫正 */
+    CMD_EMERGENCY   = 0x03u,     /* 紧急矫正 */
+    CMD_MOVE_ADJUST = 0x04u,     /* 微调移动 (x/y 偏移 mm) */
 } CmdCode_t;
 
 /** TYPE_ACK 下的命令字 CMD */
@@ -92,6 +93,15 @@ typedef struct {
 typedef struct {
     uint8_t correct;             /* 0=不矫正, 1=矫正 */
 } Emergency_t;
+
+/**
+ * 微调移动 (CMD = 0x04, TYPE = MSG_TYPE_CMD)
+ * 上位机视觉检测到偏差后, 下发 x/y 偏移量执行微调
+ */
+typedef struct {
+    int16_t x;                   /* X 偏移量 (mm) */
+    int16_t y;                   /* Y 偏移量 (mm) */
+} MoveAdjust_t;
 
 /**
  * ACK 应答 (CMD = 0x01, TYPE = MSG_TYPE_ACK)
@@ -138,6 +148,7 @@ typedef struct {
         CarMove_t  car_move;
         Grasp_t    grasp;
         Emergency_t emergency;
+        MoveAdjust_t move_adjust;
         AckAck_t   ack_ack;
         AckEvent_t ack_event;
         Position_t position;
@@ -227,6 +238,12 @@ uint16_t PackEmergency(const Emergency_t *cmd, uint8_t *out, uint16_t out_size);
 
 /** Emergency 拆包 */
 uint8_t UnpackEmergency(const uint8_t *data, uint16_t len, Emergency_t *cmd);
+
+/** MoveAdjust 封包 */
+uint16_t PackMoveAdjust(const MoveAdjust_t *cmd, uint8_t *out, uint16_t out_size);
+
+/** MoveAdjust 拆包 */
+uint8_t UnpackMoveAdjust(const uint8_t *data, uint16_t len, MoveAdjust_t *cmd);
 
 /** AckAck 封包 */
 uint16_t PackAckAck(const AckAck_t *ack, uint8_t *out, uint16_t out_size);

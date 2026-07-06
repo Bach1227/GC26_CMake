@@ -262,25 +262,3 @@ HAL_StatusTypeDef FDCAN_Transmit_STD_Buffer(FDCAN_HandleTypeDef *hfdcan, uint16_
 
 #endif
 
-#ifdef STM32H7
-
-void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
-{
-    FDCAN_RxHeaderTypeDef rx_header;
-    uint8_t rx_data[8];
-
-    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rx_header, rx_data) != HAL_OK)
-        return;
-
-    if (can_rx_callback != NULL)
-    {
-        FDCAN_RxFrame_t frame;
-        frame.ID = rx_header.Identifier;
-        frame.DLC = rx_header.DataLength;
-        memcpy(frame.data, rx_data, 8);
-        frame.TimeStamp = HAL_GetTick();
-        can_rx_callback(hfdcan, &frame);
-    }
-}
-
-#endif /* STM32H7 */

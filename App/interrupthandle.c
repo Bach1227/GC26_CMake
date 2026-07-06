@@ -13,11 +13,13 @@
 #include "tim.h"
 #include "fdcan.h"
 #include "bsp_zdt.h"
+#include "gimbal.h"
+#include <string.h>
 
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-  if (htim->Instance == TIM1)
+  if (htim->Instance == TIM8)
   {
     HAL_IncTick();
   }
@@ -92,13 +94,23 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     }
 }
 
-void HAL_CAN_RxFifo0MsgPendingCallback(FDCAN_HandleTypeDef *hcan)
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 {
     FDCAN_RxHeaderTypeDef rx_header;
     uint8_t               rx_data[8];
 
-    if (HAL_FDCAN_GetRxMessage(hcan, FDCAN_RX_FIFO0, &rx_header, rx_data) != HAL_OK)
+    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rx_header, rx_data) != HAL_OK)
         return;
 
-    ZDT_OnRxMessage(rx_header.Identifier, rx_data, rx_header.DataLength);
+    if (hfdcan == &hfdcan1) {
+        ZDT_OnRxMessage(rx_header.Identifier, rx_data, rx_header.DataLength);
+    }
+
+    if (hfdcan == &hfdcan2) {
+        FDCAN_RxFrame_t frame;
+        frame.ID   = rx_header.Identifier;
+        frame.DLC  = rx_header.DataLength;
+        memcpy(frame.data, rx_data, 8);
+        Gimbal_OnCanRx(hfdcan, &frame);
+    }
 }
