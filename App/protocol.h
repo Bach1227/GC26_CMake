@@ -53,10 +53,12 @@ typedef enum {
 
 /** TYPE_CMD 下的命令字 CMD */
 typedef enum {
-    CMD_CAR_MOVE    = 0x01u,     /* 车移动 */
-    CMD_GRASP       = 0x02u,     /* 抓取 */
-    CMD_EMERGENCY   = 0x03u,     /* 紧急矫正 */
-    CMD_MOVE_ADJUST = 0x04u,     /* 微调移动 (x/y 偏移 mm) */
+    CMD_CAR_MOVE      = 0x01u,     /* 车移动 */
+    CMD_GRASP         = 0x02u,     /* 抓取 */
+    CMD_EMERGENCY     = 0x03u,     /* 紧急矫正 */
+    CMD_MOVE_ADJUST   = 0x04u,     /* 微调移动 (x/y 偏移 mm) */
+    CMD_COLOR_CONFIRM = 0x05u,     /* 上位机→下位机 颜色检测结果 */
+    CMD_ADJUST_DONE   = 0x06u,     /* 上位机→下位机 视觉微调完成 */
 } CmdCode_t;
 
 /** TYPE_ACK 下的命令字 CMD */
@@ -104,6 +106,14 @@ typedef struct {
 } MoveAdjust_t;
 
 /**
+ * 颜色确认 (CMD = 0x05, TYPE = MSG_TYPE_CMD)
+ * 上位机视觉检测到颜色后下发, MCU 与期望颜色比对
+ */
+typedef struct {
+    uint8_t color;               /* 颜色编号 (1=红, 2=蓝, 3=绿 ...) */
+} ColorConfirm_t;
+
+/**
  * ACK 应答 (CMD = 0x01, TYPE = MSG_TYPE_ACK)
  * 下位机反馈是否接收到信息
  */
@@ -149,6 +159,7 @@ typedef struct {
         Grasp_t    grasp;
         Emergency_t emergency;
         MoveAdjust_t move_adjust;
+        ColorConfirm_t color_confirm;
         AckAck_t   ack_ack;
         AckEvent_t ack_event;
         Position_t position;
@@ -244,6 +255,12 @@ uint16_t PackMoveAdjust(const MoveAdjust_t *cmd, uint8_t *out, uint16_t out_size
 
 /** MoveAdjust 拆包 */
 uint8_t UnpackMoveAdjust(const uint8_t *data, uint16_t len, MoveAdjust_t *cmd);
+
+/** ColorConfirm 封包 */
+uint16_t PackColorConfirm(const ColorConfirm_t *cmd, uint8_t *out, uint16_t out_size);
+
+/** ColorConfirm 拆包 */
+uint8_t UnpackColorConfirm(const uint8_t *data, uint16_t len, ColorConfirm_t *cmd);
 
 /** AckAck 封包 */
 uint16_t PackAckAck(const AckAck_t *ack, uint8_t *out, uint16_t out_size);

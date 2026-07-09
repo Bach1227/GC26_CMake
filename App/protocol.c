@@ -7,7 +7,12 @@
 
 #include "protocol.h"
 #include "ChassisControl.h"
+#include "statemachine.h"
 #include <string.h>
+
+/* 共享变量 (statemachine.c 中定义) */
+extern volatile bool g_color_pending;
+extern volatile ColorConfirm_t g_color_result;
 
 /* ====================================================================== */
 /*  通用帧构建                                                            */
@@ -106,6 +111,77 @@ uint16_t Protocol_BuildError(uint8_t seq, uint8_t error_code,
 /*  命令分发 (直接调用, 不走回调)                                           */
 /* ====================================================================== */
 
+static void Protocol_Dispatch(const ProtocolFrame_t *frame);  /* 前置声明 */
+
+/* ====================================================================== */
+/*  自动拆包 (根据 TYPE/CMD 判断)                                         */
+/* ====================================================================== */
+
+uint8_t Protocol_UnpackPayload(ProtocolFrame_t *frame)
+{
+    if (frame == NULL) return 0u;
+
+    const uint8_t *data = frame->payload_ptr ? frame->payload_ptr : frame->payload.raw;
+    uint16_t len = frame->len;
+    uint8_t result = 0u;
+
+    switch (frame->type)
+    {
+    case MSG_TYPE_CMD:
+        switch (frame->cmd)
+        {
+        case CMD_CAR_MOVE:
+            result = UnpackCarMove(data, len, &frame->payload.car_move); break;
+        case CMD_GRASP:
+            result = UnpackGrasp(data, len, &frame->payload.grasp); break;
+        case CMD_EMERGENCY:
+            result = UnpackEmergency(data, len, &frame->payload.emergency); break;
+        case CMD_MOVE_ADJUST:
+            result = UnpackMoveAdjust(data, len, &frame->payload.move_adjust); break;
+        case CMD_COLOR_CONFIRM:
+            result = UnpackColorConfirm(data, len, &frame->payload.color_confirm); break;
+        default: break;
+        }
+        break;
+
+    case MSG_TYPE_ACK:
+        switch (frame->cmd)
+        {
+        case ACK_ACK_ACK:
+            result = UnpackAckAck(data, len, &frame->payload.ack_ack); break;
+        case ACK_ACK_EVENT:
+            result = UnpackAckEvent(data, len, &frame->payload.ack_event); break;
+        default: break;
+        }
+        break;
+
+    case MSG_TYPE_STATUS:
+    case MSG_TYPE_EVENT:
+        if (len >= 4)
+            result = UnpackPosition(data, len, &frame->payload.position);
+        break;
+
+    case MSG_TYPE_HEARTBEAT:
+        result = 1u;
+        break;
+
+    case MSG_TYPE_ERROR:
+        result = 1u;
+        break;
+
+    default: break;
+    }
+
+    if (result)
+        Protocol_Dispatch(frame);
+
+    return result;
+}
+
+/* ====================================================================== */
+/*  命令分发 实现                                                          */
+/* ====================================================================== */
+
 static void Protocol_Dispatch(const ProtocolFrame_t *frame)
 {
     switch (frame->type) {
@@ -126,6 +202,17 @@ static void Protocol_Dispatch(const ProtocolFrame_t *frame)
             }
             break;
         }
+        case CMD_COLOR_CONFIRM: {
+            ColorConfirm_t confirm;
+            if (UnpackColorConfirm(frame->payload_ptr, frame->len, &confirm)) {
+                g_color_result = confirm;
+                g_color_pending = false;
+            }
+            break;
+        }
+        case CMD_ADJUST_DONE:
+            SM_SendEventFromISR(EVENT_ADJUST_DONE);
+            break;
         default:
             break;
         }
@@ -338,6 +425,24 @@ uint8_t UnpackMoveAdjust(const uint8_t *data, uint16_t len, MoveAdjust_t *cmd)
     return 1u;
 }
 
+uint16_t PackColorConfirm(const ColorConfirm_t *cmd, uint8_t *out, uint16_t out_size)
+{
+    if (cmd == NULL || out == NULL || out_size < 1) return 0;
+
+    out[0] = cmd->color;
+
+    return 1;
+}
+
+uint8_t UnpackColorConfirm(const uint8_t *data, uint16_t len, ColorConfirm_t *cmd)
+{
+    if (data == NULL || cmd == NULL || len < 1) return 0u;
+
+    cmd->color = data[0];
+
+    return 1u;
+}
+
 uint8_t UnpackAckAck(const uint8_t *data, uint16_t len, AckAck_t *ack)
 {
     if (data == NULL || ack == NULL || len < 3) return 0u;
@@ -367,63 +472,3 @@ uint8_t UnpackPosition(const uint8_t *data, uint16_t len, Position_t *pos)
     return 1u;
 }
 
-/* ====================================================================== */
-/*  自动拆包 (根据 TYPE/CMD 判断)                                         */
-/* ====================================================================== */
-
-uint8_t Protocol_UnpackPayload(ProtocolFrame_t *frame)
-{
-    if (frame == NULL) return 0u;
-
-    const uint8_t *data = frame->payload_ptr ? frame->payload_ptr : frame->payload.raw;
-    uint16_t len = frame->len;
-
-    switch (frame->type)
-    {
-    case MSG_TYPE_CMD:
-        switch (frame->cmd)
-        {
-        case CMD_CAR_MOVE:
-            return UnpackCarMove(data, len, &frame->payload.car_move);
-        case CMD_GRASP:
-            return UnpackGrasp(data, len, &frame->payload.grasp);
-        case CMD_EMERGENCY:
-            return UnpackEmergency(data, len, &frame->payload.emergency);
-        case CMD_MOVE_ADJUST:
-            return UnpackMoveAdjust(data, len, &frame->payload.move_adjust);
-        default:
-            return 0u; /* 未知 CMD */
-        }
-
-    case MSG_TYPE_ACK:
-        switch (frame->cmd)
-        {
-        case ACK_ACK_ACK:
-            return UnpackAckAck(data, len, &frame->payload.ack_ack);
-        case ACK_ACK_EVENT:
-            return UnpackAckEvent(data, len, &frame->payload.ack_event);
-        default:
-            return 0u;
-        }
-
-    case MSG_TYPE_STATUS:
-    case MSG_TYPE_EVENT:
-        /* STATUS/EVENT 默认携带 Position */
-        if (len >= 4)
-        {
-            return UnpackPosition(data, len, &frame->payload.position);
-        }
-        return 0u;
-
-    case MSG_TYPE_HEARTBEAT:
-        /* 心跳无 PAYLOAD, 直接成功 */
-        return 1u;
-
-    case MSG_TYPE_ERROR:
-        /* 错误帧 PAYLOAD[0] 即错误码, 已存在 raw 中 */
-        return 1u;
-
-    default:
-        return 0u;
-    }
-}

@@ -2,6 +2,7 @@
 #include "bsp_zdt.h"
 #include "bsp_can.h"
 #include "gimbal.h"
+#include "MoveControl.h"
 #include "cmsis_os2.h"
 #include <math.h>
 #include <string.h>
@@ -16,7 +17,6 @@
 
 #define WHEEL_RADIUS     0.075f
 #define PULSES_PER_REV   2000
-#define WHEEL_BASE       0.2f
 #define POS_SPEED_RPM    200
 #define POS_ACCEL        128
 
@@ -31,19 +31,6 @@
 #define CHASSIS_QUEUE_LEN   8
 
 static QueueHandle_t chassis_queue = NULL;
-
-/* ====================================================================== */
-/*  逆运动学: 车体位移(m) → 四轮线位移(m)                                 */
-/* ====================================================================== */
-
-static void Chassis_IK(float dx_m, float dy_m, float dt_rad, float s[4])
-{
-    float rw = WHEEL_BASE * dt_rad;
-    s[0] = dy_m + rw;   /* 前轮 */
-    s[1] = dx_m - rw;   /* 左轮 */
-    s[2] = dy_m - rw;   /* 后轮 */
-    s[3] = dx_m + rw;   /* 右轮 */
-}
 
 /* ====================================================================== */
 /*  工具: 轮位移(m) → ZDT_SetPosition                                    */
@@ -65,20 +52,6 @@ static void wheel_position(uint8_t id, float disp_m)
 }
 
 /* ====================================================================== */
-/*  Chassis_InitTask                                                      */
-/* ====================================================================== */
-
-void Chassis_InitTask(void)
-{
-    const osThreadAttr_t attr = {
-        .name       = "chassis",
-        .stack_size = 256 * 4,
-        .priority   = osPriorityNormal,
-    };
-    osThreadNew(Chassis_Task, NULL, &attr);
-}
-
-/* ====================================================================== */
 /*  Chassis_OnCarMove                                                      */
 /*  上位机方向+距离 → 车体位移 → 逆运动学 → 四轮脉冲 → ZDT_SetPosition    */
 /* ====================================================================== */
@@ -92,18 +65,19 @@ void Chassis_OnCarMove(const CarMove_t *cmd)
     float dy = sinf(cmd->direction) * cmd->distance;
     float dt = cmd->direction;          /* 旋转角 = 朝向 */
 
-    /* 逆运动学: 车体位移 → 四轮线位移 */
-    float s[4];
-    Chassis_IK(dx, dy, dt, s);
+    /* 逆运动学: 车体位移 → 四轮线位移 (位移量直接代入速度结构体, 线性变换等价) */
+    ChassisSpeed_t ik_in  = {dx, dy, dt};
+    WheelSpeed_t   ik_out;
+    Kinematics_Inverse(&ik_in, &ik_out);
 
     /* 四轮定位 */
-    wheel_position(1, s[0]);
+    wheel_position(1, ik_out.v1);
     osDelay(1);
-    wheel_position(2, s[1]);
+    wheel_position(2, ik_out.v2);
     osDelay(1);
-    wheel_position(3, s[2]);
+    wheel_position(3, ik_out.v3);
     osDelay(1);
-    wheel_position(4, s[3]);
+    wheel_position(4, ik_out.v4);
     osDelay(1);
 
     ZDT_SyncTrigger();
@@ -320,15 +294,16 @@ void Chassis_Task(void *argument)
             float dy = (float)cmd.y / 1000.0f;
             float dt = (float)cmd.rotation / 100.0f;
 
-            float s[4];
-            Chassis_IK(dx, dy, dt, s);
+            ChassisSpeed_t ik_in  = {dx, dy, dt};
+            WheelSpeed_t   ik_out;
+            Kinematics_Inverse(&ik_in, &ik_out);
 
-            // wheel_position(1, s[0]); osDelay(1);
-            // wheel_position(2, s[1]); osDelay(1);
-            // wheel_position(3, s[2]); osDelay(1);
-            // wheel_position(4, s[3]); osDelay(1);
+            wheel_position(1, ik_out.v1); osDelay(1);
+            wheel_position(2, ik_out.v2); osDelay(1);
+            wheel_position(3, ik_out.v3); osDelay(1);
+            wheel_position(4, ik_out.v4); osDelay(1);
 
-            // ZDT_SyncTrigger();
+            ZDT_SyncTrigger();
 
             move_start_tick = HAL_GetTick();
             xTimerStart(move_check_timer, 0);

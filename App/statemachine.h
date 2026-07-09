@@ -20,18 +20,24 @@ typedef enum {
 
     /* 第一批次 */
     STATE_MOVE_TO_RAW_1,    /* 前往原料区 (起点: 二维码板) */
+    STATE_ADJUST_RAW_1,     /* 原料区视觉微调 */
     STATE_FETCH_RAW_1,      /* 抓取第一批物料 */
     STATE_MOVE_TO_ROUGH_1,  /* 前往粗加工区 */
+    STATE_ADJUST_ROUGH_1,   /* 粗加工区视觉微调 */
     STATE_PLACE_ROUGH_1,    /* 放置第一批物料 */
     STATE_MOVE_TO_TEMP_1,   /* 前往暂存区 */
+    STATE_ADJUST_TEMP_1,    /* 暂存区视觉微调 */
     STATE_PLACE_TEMP_1,     /* 放置第一批物料 (平放) */
 
     /* 第二批次 */
     STATE_MOVE_TO_RAW_2,    /* 前往原料区 (起点: 暂存区) */
+    STATE_ADJUST_RAW_2,     /* 原料区视觉微调 */
     STATE_FETCH_RAW_2,      /* 抓取第二批物料 */
     STATE_MOVE_TO_ROUGH_2,  /* 前往粗加工区 */
+    STATE_ADJUST_ROUGH_2,   /* 粗加工区视觉微调 */
     STATE_PLACE_ROUGH_2,    /* 放置第二批物料 */
     STATE_MOVE_TO_TEMP_2,   /* 前往暂存区 */
+    STATE_ADJUST_TEMP_2,    /* 暂存区视觉微调 */
     STATE_STACK_TEMP_2,     /* 放置第二批物料 (码垛) */
 
     /* 收尾 */
@@ -47,6 +53,7 @@ typedef enum {
     EVENT_START,            /* 启动触发 */
     EVENT_ARRIVED,          /* 底盘到位 (所有移动完成) */
     EVENT_ACTION_DONE,      /* 机械臂操作完成 (扫码/抓取/放置/码垛) */
+    EVENT_ADJUST_DONE,      /* 上位机视觉微调完成 */
 } Event_t;
 
 /* ====================================================================== */
