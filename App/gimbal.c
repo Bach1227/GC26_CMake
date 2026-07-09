@@ -2,11 +2,22 @@
 #include "bsp_dm.h"
 #include "bsp_zdt.h"
 #include "bsp_can.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
 #include "cmsis_os2.h"
 #include "PID.h"
+#include "protocol.h"
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include "tim.h"
+
+/* 共享变量 (statemachine.c 中定义) */
+extern volatile bool g_color_pending;
+extern volatile ColorConfirm_t g_color_result;
+extern uint8_t seq[3];
+extern const uint8_t expected_color[4];
 
 /* ====================================================================== */
 /*  配置                                                                  */
@@ -209,15 +220,107 @@ void Gimbal_Gripper(uint32_t pulse)
 }
 
 /* ====================================================================== */
+/*  复合命令 — 取料序列 (内部直接调 Gimbal_* API)                        */
+/* ====================================================================== */
+
+#define FETCH_PICKUP_EXTEND  500
+#define FETCH_PLACE_EXTEND   300
+#define FETCH_EXTEND_DIFF    (FETCH_PICKUP_EXTEND - FETCH_PLACE_EXTEND)
+
+static float fetch_car_angle(uint8_t pos)
+{
+    float deg;
+    if (pos == 1)      deg = 180.0f;
+    else if (pos == 2) deg = 220.0f;
+    else               deg = 260.0f;
+    if (deg > 180.0f) deg -= 360.0f;
+    return deg;
+}
+
+static void ExecFetchRaw(Event_t done_event)
+{
+    Gimbal_Extend(FETCH_PICKUP_EXTEND);
+    osDelay(100);
+
+    for (int i = 0; i < 3; i++)
+    {
+        g_color_pending = true;
+        while (g_color_pending) osDelay(10);
+
+        if (g_color_result.color == expected_color[seq[i]])
+        {
+            Gimbal_Lift(-200); osDelay(100);
+            Gimbal_Gripper(30000); osDelay(200);
+            Gimbal_Lift(200); osDelay(100);
+        }
+
+        Gimbal_Extend(-FETCH_EXTEND_DIFF); osDelay(100);
+        float angle = fetch_car_angle(seq[i]);
+        Gimbal_SetAngle(angle);
+        while (fabsf(Gimbal_GetAngle() - angle) > 1.0f) osDelay(10);
+
+        Gimbal_Lift(-200); osDelay(100);
+        Gimbal_Gripper(0); osDelay(200);
+        Gimbal_Lift(200); osDelay(100);
+
+        Gimbal_Extend(FETCH_EXTEND_DIFF); osDelay(100);
+        Gimbal_SetAngle(0.0f);
+        while (fabsf(Gimbal_GetAngle()) > 1.0f) osDelay(10);
+    }
+
+    Gimbal_Extend(-FETCH_PICKUP_EXTEND);
+    osDelay(100);
+
+    SM_SendEvent(done_event);
+}
+
+/* ====================================================================== */
+/*  Gimbal_CmdTask — 队列驱动机械臂命令执行                               */
+/* ====================================================================== */
+
+static QueueHandle_t gimbal_cmd_queue = NULL;
+
+void Gimbal_CmdTask(void *argument)
+{
+    (void)argument;
+    GimbalCmd_t cmd;
+
+    for (;;)
+    {
+        xQueueReceive(gimbal_cmd_queue, &cmd, portMAX_DELAY);
+
+        switch (cmd.type) {
+        case GIMBAL_CMD_FETCH_RAW:
+            ExecFetchRaw(cmd.completion_event);
+            break;
+        case GIMBAL_CMD_PLACE_ROUGH:
+        case GIMBAL_CMD_PLACE_TEMP:
+        case GIMBAL_CMD_STACK_TEMP:
+            /* TODO: 后续补全 */
+            SM_SendEvent(cmd.completion_event);
+            break;
+        }
+    }
+}
+
+void Gimbal_CmdInit(void)
+{
+    gimbal_cmd_queue = xQueueCreate(16, sizeof(GimbalCmd_t));
+    xTaskCreate(Gimbal_CmdTask, "gimbal_cmd", 256, NULL, osPriorityAboveNormal, NULL);
+}
+
+int Gimbal_SendCmd(const GimbalCmd_t *cmd)
+{
+    if (gimbal_cmd_queue == NULL || cmd == NULL) return -1;
+    return (xQueueSend(gimbal_cmd_queue, cmd, 0) == pdPASS) ? 0 : -1;
+}
+
+/* ====================================================================== */
 /*  Gimbal_InitTask                                                       */
 /* ====================================================================== */
 
 void Gimbal_InitTask(void)
 {
-    const osThreadAttr_t attr = {
-        .name       = "gimbal",
-        .stack_size = 256 * 4,
-        .priority   = osPriorityAboveNormal,
-    };
-    osThreadNew(Gimbal_Task, NULL, &attr);
+    xTaskCreate(Gimbal_Task, "gimbal", 256, NULL, osPriorityAboveNormal, NULL);
+    Gimbal_CmdInit();
 }

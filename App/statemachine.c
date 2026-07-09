@@ -5,7 +5,9 @@
 
 #include "ChassisControl.h"
 #include "Gimbal.h"
+#include "protocol.h"
 #include <math.h>
+
 /* ====================================================================== */
 /*  内部变量                                                              */
 /* ====================================================================== */
@@ -24,17 +26,47 @@ static QueueHandle_t sm_queue = NULL;
 
 uint8_t seq[3] = {2, 3, 1};
 
+/* ====================================================================== */
+/*  颜色校验                                                              */
+/* ====================================================================== */
+
+/* 期望颜色表: 按位置索引, [1]=蓝, [2]=红, [3]=绿 */
+const uint8_t expected_color[4] = {0, 2, 1, 3};
+
+/* 共享变量: 由 Protocol_Dispatch 写入, 状态机轮询 */
+volatile ColorConfirm_t g_color_result = {0};
+volatile bool           g_color_pending = false;
+
+/* ====================================================================== */
+/*  伸长距离                                                              */
+/* ====================================================================== */
+
+#define PICKUP_EXTEND  500
+#define PLACE_EXTEND   300
+#define EXTEND_DIFF    (PICKUP_EXTEND - PLACE_EXTEND)  /* 200 */
+
+/* 车身位伸出距离 (3个位置相同) */
+#define CAR_EXTEND      300
+/* 地图工位伸出距离: 2最短, 1/3相同 */
+#define MAP_EXTEND_1_3  400
+#define MAP_EXTEND_2    200
+
+/* ====================================================================== */
+/*  辅助函数                                                              */
+/* ====================================================================== */
+
+static int32_t map_extend(uint8_t pos) {
+    return (pos == 2) ? MAP_EXTEND_2 : MAP_EXTEND_1_3;
+}
+
+static void Gripper_Close(void) { Gimbal_Gripper(30000); }
+static void Gripper_Open(void)  { Gimbal_Gripper(0); }
+
 /* 前向声明 */
 static void SM_Task(void *argument);
 
 /* ====================================================================== */
 /*  动作函数                                                              */
-/*                                                                        */
-/*  移动动作: Chassis_SendMoveCmd(x, y, EVENT_ARRIVED)                   */
-/*           到位后 Chassis_Task 自动发 EVENT_ARRIVED                     */
-/*                                                                        */
-/*  操作动作: SM_SendEvent(EVENT_ACTION_DONE)                            */
-/*           表示机械臂操作 (扫码/抓取/放置) 完成                         */
 /* ====================================================================== */
 
 static void Action_Nop(void)
@@ -58,11 +90,6 @@ static void Action_ParseQR(void)
 
 /* ---- 第一批次 ---- */
 
-static void Action_MoveToRaw1(void)
-{
-    Chassis_SendMoveCmd(800, 0, EVENT_ARRIVED);
-}
-
 /* 车体上的 3 个角度 (1=180°, 2=220°, 3=260°) */
 static float car_angle(uint8_t pos)
 {
@@ -84,29 +111,15 @@ static float map_angle(uint8_t pos)
     return deg;
 }
 
+static void Action_MoveToRaw1(void)
+{
+    Chassis_SendMoveCmd(800, 0, EVENT_ARRIVED);
+}
+
 static void Action_FetchRaw1(void)
 {
-    /* 按顺序取料: seq[3] = {2, 3, 1} */
-    /* 每次: 0° CW→目标 → 取料 → CCW←0° */
-    for (int i = 0; i < 3; i++)
-    {
-        float angle = car_angle(seq[i]);
-        Gimbal_SetAngle(angle);                     /* CW 出去 */
-        while (fabsf(Gimbal_GetAngle() - angle) > 1.0f)
-            osDelay(10);
-
-        // Gimbal_Extend(500);           /* 伸长 */
-        // osDelay(100);                 /* 等伸出到位 */
-        // Gimbal_Gripper(30000);        /* 夹紧 */
-        // osDelay(200);                 /* 等夹紧 */
-        // Gimbal_Extend(-500);          /* 缩回 */
-
-        Gimbal_SetAngle(0.0f);                      /* CCW 回零 */
-        while (fabsf(Gimbal_GetAngle()) > 1.0f)
-            osDelay(10);
-    }
-
-    SM_SendEvent(EVENT_ACTION_DONE);
+    GimbalCmd_t cmd = {GIMBAL_CMD_FETCH_RAW, EVENT_ACTION_DONE};
+    Gimbal_SendCmd(&cmd);
 }
 
 static void Action_MoveToRough1(void)
@@ -118,7 +131,7 @@ static void Action_MoveToRough1(void)
 
 static void Action_PlaceRough1(void)
 {
-    /* 按顺序: 从车身取料 → 放到粗加工区 → 取回 */
+    /* 从车身取料 → 放到粗加工区 */
     for (int i = 0; i < 3; i++)
     {
         /* 从车身对应角度取料 */
@@ -127,43 +140,75 @@ static void Action_PlaceRough1(void)
         while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
             osDelay(10);
 
-        // Gimbal_Extend(500);           /* 伸长 */
-        // osDelay(100);
-        // Gimbal_Gripper(30000);        /* 夹取 */
-        // osDelay(200);
-        // Gimbal_Extend(-500);          /* 缩回 */
+        Gimbal_Extend(CAR_EXTEND);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Close();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-CAR_EXTEND);
+        osDelay(100);
 
-        /* 转到工位对应角度放置，放完了就从车体取下一个 */
+        /* 转到工位对应角度放置 */
         float m_angle = map_angle(seq[i]);
         Gimbal_SetAngle(m_angle);
         while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
             osDelay(10);
+
+        int32_t m_ext = map_extend(seq[i]);
+        Gimbal_Extend(m_ext);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Open();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-m_ext);
+        osDelay(100);
     }
 
+    /* 取回: 从工位取 → 放回车身 */
     for (int i = 0; i < 3; i++)
     {
-
         /* 转到工位对应角度取料 */
         float m_angle = map_angle(seq[i]);
         Gimbal_SetAngle(m_angle);
         while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
             osDelay(10);
-        
 
-        // Gimbal_Extend(500);           /* 伸长 */
-        // osDelay(100);
-        // Gimbal_Gripper(30000);        /* 夹取 */
-        // osDelay(200);
-        // Gimbal_Extend(-500);          /* 缩回 */
+        int32_t m_ext = map_extend(seq[i]);
+        Gimbal_Extend(m_ext);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Close();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-m_ext);
+        osDelay(100);
 
         /* 去车身对应角度放料 */
         float c_angle = car_angle(seq[i]);
         Gimbal_SetAngle(c_angle);
         while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
             osDelay(10);
+
+        Gimbal_Extend(CAR_EXTEND);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Open();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-CAR_EXTEND);
+        osDelay(100);
     }
 
-    //三个都放完后取回
     Gimbal_SetAngle(0);
     SM_SendEvent(EVENT_ACTION_DONE);
 }
@@ -176,7 +221,7 @@ static void Action_MoveToTemp1(void)
 
 static void Action_PlaceTemp1(void)
 {
-    /* 按顺序: 从车身取料 → 放到暂存区 (不回取) */
+    /* 从车身取料 → 放到暂存区 (不回取) */
     for (int i = 0; i < 3; i++)
     {
         /* 从车身对应角度取料 */
@@ -185,12 +230,16 @@ static void Action_PlaceTemp1(void)
         while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
             osDelay(10);
 
-        // Gimbal_Extend(500);           /* 伸长 */
-        // osDelay(100);
-        // Gimbal_Gripper(30000);        /* 夹取 */
-        // osDelay(200);
-        // Gimbal_Extend(-500);          /* 缩回 */
-        // Gimbal_SetAngle(0.0f);
+        Gimbal_Extend(CAR_EXTEND);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Close();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-CAR_EXTEND);
+        osDelay(100);
 
         /* 转到暂存区对应角度放置 */
         float m_angle = map_angle(seq[i]);
@@ -198,12 +247,17 @@ static void Action_PlaceTemp1(void)
         while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
             osDelay(10);
 
-        // Gimbal_Extend(500);           /* 伸长到放置位 */
-        // osDelay(100);
-        // Gimbal_Gripper(0);            /* 松开 */
-        // osDelay(200);
-        // Gimbal_Extend(-500);          /* 缩回 */
-        // Gimbal_SetAngle(0.0f);
+        int32_t m_ext = map_extend(seq[i]);
+        Gimbal_Extend(m_ext);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Open();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-m_ext);
+        osDelay(100);
     }
     Gimbal_SetAngle(0.0f);
     SM_SendEvent(EVENT_ACTION_DONE);
@@ -219,24 +273,50 @@ static void Action_MoveToRaw2(void)
 
 static void Action_FetchRaw2(void)
 {
-    /* 同第一批: 按顺序从原料区取料到车身 */
+    /* 同第一批: 伸出→等颜色→夹取→转放料位→释放→归零 */
+    Gimbal_Extend(PICKUP_EXTEND);
+    osDelay(100);
+
     for (int i = 0; i < 3; i++)
     {
+        g_color_pending = true;
+        while (g_color_pending)
+            osDelay(10);
+
+        if (g_color_result.color == expected_color[seq[i]])
+        {
+            Gimbal_Lift(-200);
+            osDelay(100);
+            Gripper_Close();
+            osDelay(200);
+            Gimbal_Lift(200);
+            osDelay(100);
+        }
+
+        Gimbal_Extend(-EXTEND_DIFF);
+        osDelay(100);
         float angle = car_angle(seq[i]);
         Gimbal_SetAngle(angle);
         while (fabsf(Gimbal_GetAngle() - angle) > 1.0f)
             osDelay(10);
 
-        // Gimbal_Extend(500);
-        // osDelay(100);
-        // Gimbal_Gripper(30000);
-        // osDelay(200);
-        // Gimbal_Extend(-500);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Open();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
 
+        Gimbal_Extend(EXTEND_DIFF);
+        osDelay(100);
         Gimbal_SetAngle(0.0f);
         while (fabsf(Gimbal_GetAngle()) > 1.0f)
             osDelay(10);
     }
+
+    Gimbal_Extend(-PICKUP_EXTEND);
+    osDelay(100);
+
     SM_SendEvent(EVENT_ACTION_DONE);
 }
 
@@ -248,7 +328,7 @@ static void Action_MoveToRough2(void)
 
 static void Action_PlaceRough2(void)
 {
-    /* 同第一批: 从车身取 → 放到粗加工区 → 取回 */
+    /* 从车身取料 → 放到粗加工区 */
     for (int i = 0; i < 3; i++)
     {
         float c_angle = car_angle(seq[i]);
@@ -256,39 +336,73 @@ static void Action_PlaceRough2(void)
         while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
             osDelay(10);
 
-        // Gimbal_Extend(500);
-        // osDelay(100);
-        // Gimbal_Gripper(30000);
-        // osDelay(200);
-        // Gimbal_Extend(-500);
-        // Gimbal_SetAngle(0.0f);
+        Gimbal_Extend(CAR_EXTEND);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Close();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-CAR_EXTEND);
+        osDelay(100);
 
         float m_angle = map_angle(seq[i]);
         Gimbal_SetAngle(m_angle);
         while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
             osDelay(10);
 
-        // Gimbal_Extend(500);
-        // osDelay(100);
-        // Gimbal_Gripper(0);
-        // osDelay(200);
-        // Gimbal_Extend(-500);
-        // Gimbal_SetAngle(0.0f);
+        int32_t m_ext = map_extend(seq[i]);
+        Gimbal_Extend(m_ext);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Open();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-m_ext);
+        osDelay(100);
     }
 
-    /* TODO: 取回 */
-    Gimbal_SetAngle(180.0f);
-    while (fabsf(Gimbal_GetAngle() - 180.0f) > 1.0f)
-        osDelay(10);
-    // Gimbal_Extend(500);
-    // osDelay(100);
-    // Gimbal_Gripper(30000);
-    // osDelay(200);
-    // Gimbal_Extend(-500);
-    Gimbal_SetAngle(0.0f);
-    while (fabsf(Gimbal_GetAngle()) > 1.0f)
-        osDelay(10);
+    /* 取回 */
+    for (int i = 0; i < 3; i++)
+    {
+        float m_angle = map_angle(seq[i]);
+        Gimbal_SetAngle(m_angle);
+        while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
+            osDelay(10);
 
+        int32_t m_ext = map_extend(seq[i]);
+        Gimbal_Extend(m_ext);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Close();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-m_ext);
+        osDelay(100);
+
+        float c_angle = car_angle(seq[i]);
+        Gimbal_SetAngle(c_angle);
+        while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
+            osDelay(10);
+
+        Gimbal_Extend(CAR_EXTEND);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Open();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-CAR_EXTEND);
+        osDelay(100);
+    }
+
+    Gimbal_SetAngle(0.0f);
     SM_SendEvent(EVENT_ACTION_DONE);
 }
 
@@ -300,7 +414,7 @@ static void Action_MoveToTemp2(void)
 
 static void Action_StackTemp2(void)
 {
-    /* 同第一批暂存: 从车身取 → 放到暂存区码垛 (不回取) */
+    /* 从车身取料 → 放到暂存区码垛 (不回取) */
     for (int i = 0; i < 3; i++)
     {
         float c_angle = car_angle(seq[i]);
@@ -308,24 +422,33 @@ static void Action_StackTemp2(void)
         while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
             osDelay(10);
 
-        // Gimbal_Extend(500);
-        // osDelay(100);
-        // Gimbal_Gripper(30000);
-        // osDelay(200);
-        // Gimbal_Extend(-500);
-        // Gimbal_SetAngle(0.0f);
+        Gimbal_Extend(CAR_EXTEND);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Close();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-CAR_EXTEND);
+        osDelay(100);
 
         float m_angle = map_angle(seq[i]);
         Gimbal_SetAngle(m_angle);
         while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
             osDelay(10);
 
-        // Gimbal_Extend(500);
-        // osDelay(100);
-        // Gimbal_Gripper(0);
-        // osDelay(200);
-        // Gimbal_Extend(-500);
-        // Gimbal_SetAngle(0.0f);
+        int32_t m_ext = map_extend(seq[i]);
+        Gimbal_Extend(m_ext);
+        osDelay(100);
+        Gimbal_Lift(-200);
+        osDelay(100);
+        Gripper_Open();
+        osDelay(200);
+        Gimbal_Lift(200);
+        osDelay(100);
+        Gimbal_Extend(-m_ext);
+        osDelay(100);
     }
     Gimbal_SetAngle(0.0f);
     SM_SendEvent(EVENT_ACTION_DONE);
@@ -341,9 +464,6 @@ static void Action_ReturnStart(void)
 
 /* ====================================================================== */
 /*  默认状态转换表 (线性查表法)                                           */
-/*                                                                        */
-/*  每个状态对应一个 EVENT_ARRIVED (移动) 或 EVENT_ACTION_DONE (操作)     */
-/*  引擎根据当前状态查表, 无需内部变量即可线性流转                         */
 /* ====================================================================== */
 
 const StateMachineTable_t SM_DefaultTable[] = {
@@ -352,18 +472,24 @@ const StateMachineTable_t SM_DefaultTable[] = {
     {STATE_MOVE_TO_QR,      EVENT_ARRIVED,      Action_ParseQR,      STATE_READ_QR},
     {STATE_READ_QR,         EVENT_ACTION_DONE,  Action_MoveToRaw1,   STATE_MOVE_TO_RAW_1},
 
-    {STATE_MOVE_TO_RAW_1,   EVENT_ARRIVED,      Action_FetchRaw1,    STATE_FETCH_RAW_1},
+    {STATE_MOVE_TO_RAW_1,   EVENT_ARRIVED,      Action_Nop,          STATE_ADJUST_RAW_1},
+    {STATE_ADJUST_RAW_1,    EVENT_ADJUST_DONE,   Action_FetchRaw1,    STATE_FETCH_RAW_1},
     {STATE_FETCH_RAW_1,     EVENT_ACTION_DONE,  Action_MoveToRough1, STATE_MOVE_TO_ROUGH_1},
-    {STATE_MOVE_TO_ROUGH_1, EVENT_ARRIVED,      Action_PlaceRough1,  STATE_PLACE_ROUGH_1},
+    {STATE_MOVE_TO_ROUGH_1, EVENT_ARRIVED,      Action_Nop, STATE_ADJUST_ROUGH_1},
+    {STATE_ADJUST_ROUGH_1,  EVENT_ADJUST_DONE,   Action_PlaceRough1,  STATE_PLACE_ROUGH_1},
     {STATE_PLACE_ROUGH_1,   EVENT_ACTION_DONE,  Action_MoveToTemp1,  STATE_MOVE_TO_TEMP_1},
-    {STATE_MOVE_TO_TEMP_1,  EVENT_ARRIVED,      Action_PlaceTemp1,   STATE_PLACE_TEMP_1},
+    {STATE_MOVE_TO_TEMP_1,  EVENT_ARRIVED,      Action_Nop,  STATE_ADJUST_TEMP_1},
+    {STATE_ADJUST_TEMP_1,   EVENT_ADJUST_DONE,   Action_PlaceTemp1,   STATE_PLACE_TEMP_1},
     {STATE_PLACE_TEMP_1,    EVENT_ACTION_DONE,  Action_MoveToRaw2,   STATE_MOVE_TO_RAW_2},
 
-    {STATE_MOVE_TO_RAW_2,   EVENT_ARRIVED,      Action_FetchRaw2,    STATE_FETCH_RAW_2},
+    {STATE_MOVE_TO_RAW_2,   EVENT_ARRIVED,      Action_Nop,   STATE_ADJUST_RAW_2},
+    {STATE_ADJUST_RAW_2,    EVENT_ADJUST_DONE,   Action_FetchRaw2,    STATE_FETCH_RAW_2},
     {STATE_FETCH_RAW_2,     EVENT_ACTION_DONE,  Action_MoveToRough2, STATE_MOVE_TO_ROUGH_2},
-    {STATE_MOVE_TO_ROUGH_2, EVENT_ARRIVED,      Action_PlaceRough2,  STATE_PLACE_ROUGH_2},
+    {STATE_MOVE_TO_ROUGH_2, EVENT_ARRIVED,      Action_Nop, STATE_ADJUST_ROUGH_2},
+    {STATE_ADJUST_ROUGH_2,  EVENT_ADJUST_DONE,   Action_PlaceRough2,  STATE_PLACE_ROUGH_2},
     {STATE_PLACE_ROUGH_2,   EVENT_ACTION_DONE,  Action_MoveToTemp2,  STATE_MOVE_TO_TEMP_2},
-    {STATE_MOVE_TO_TEMP_2,  EVENT_ARRIVED,      Action_StackTemp2,   STATE_STACK_TEMP_2},
+    {STATE_MOVE_TO_TEMP_2,  EVENT_ARRIVED,      Action_Nop,  STATE_ADJUST_TEMP_2},
+    {STATE_ADJUST_TEMP_2,   EVENT_ADJUST_DONE,   Action_StackTemp2,   STATE_STACK_TEMP_2},
     {STATE_STACK_TEMP_2,    EVENT_ACTION_DONE,  Action_ReturnStart,  STATE_RETURN_START},
 
     {STATE_RETURN_START,    EVENT_ARRIVED,      Action_Nop,          STATE_IDLE},
@@ -383,12 +509,7 @@ void SM_Init(void)
 
     sm_queue = xQueueCreate(SM_QUEUE_LENGTH, sizeof(Event_t));
 
-    const osThreadAttr_t attr = {
-        .name       = "sm_event",
-        .stack_size = 256 * 2,
-        .priority   = osPriorityNormal,
-    };
-    osThreadNew(SM_Task, NULL, &attr);
+    xTaskCreate(SM_Task, "sm_event", 128, NULL, osPriorityNormal, NULL);
 
     SM_SendEvent(EVENT_START);
 }

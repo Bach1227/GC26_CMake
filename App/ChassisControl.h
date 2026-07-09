@@ -33,8 +33,6 @@ void Chassis_NotifyMoveComplete(void);
 
 /* ---- ---- */
 
-void Chassis_InitTask(void);
-
 void Chassis_OnCarMove(const CarMove_t *cmd);
 
 void Chassis_Task(void *argument);
