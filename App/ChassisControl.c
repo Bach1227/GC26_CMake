@@ -1,7 +1,8 @@
 #include "ChassisControl.h"
+#include "config.h"
 #include "bsp_zdt.h"
 #include "bsp_can.h"
-#include "gimbal.h"
+#include "bsp_witgyro.h"
 #include "MoveControl.h"
 #include "cmsis_os2.h"
 #include <math.h>
@@ -17,8 +18,8 @@
 
 #define WHEEL_RADIUS     0.075f
 #define PULSES_PER_REV   2000
-#define POS_SPEED_RPM    200
-#define POS_ACCEL        128
+#define POS_SPEED_RPM    CONFIG_STEPPER_CHASSIS_SPEED_RPM
+#define POS_ACCEL        CONFIG_STEPPER_CHASSIS_ACCEL
 
 /* 脉冲 / 米: PPR / (2πR) */
 #define PULSE_PER_M      ((float)PULSES_PER_REV / (2.0f * 3.14159265f * WHEEL_RADIUS))
@@ -42,12 +43,9 @@ static void wheel_position(uint8_t id, float disp_m)
     if (pulses == 0) return;
 
     uint8_t dir  = (pulses > 0) ? ZDT_DIR_CW : ZDT_DIR_CCW;
-    uint16_t rpm = (uint16_t)((pulses > 0) ? pulses : -pulses);
-    if (rpm > POS_SPEED_RPM) rpm = POS_SPEED_RPM;
-
     if (pulses < 0) pulses = -pulses;
 
-    ZDT_SetPosition(id, dir, rpm, POS_ACCEL, pulses,
+    ZDT_SetPosition(id, dir, POS_SPEED_RPM, POS_ACCEL, pulses,
                     ZDT_POS_RELATIVE, ZDT_SYNC_WAIT);
 }
 
@@ -60,28 +58,27 @@ void Chassis_OnCarMove(const CarMove_t *cmd)
 {
     if (cmd == NULL) return;
 
-    /* 方向角(rad) → 车体位移 */
-    float dx = cosf(cmd->direction) * cmd->distance;
-    float dy = sinf(cmd->direction) * cmd->distance;
-    float dt = cmd->direction;          /* 旋转角 = 朝向 */
+    /* direction(度) → 弧度, distance(mm) → 米 */
+    float dir_rad = (float)cmd->direction * 3.14159265f / 180.0f;
+    float dist_m  = (float)cmd->distance / 1000.0f;
 
-    /* 逆运动学: 车体位移 → 四轮线位移 (位移量直接代入速度结构体, 线性变换等价) */
+    /* 方向角 → 车体位移 (纯平移, 不旋转) */
+    float dx = cosf(dir_rad) * dist_m;
+    float dy = sinf(dir_rad) * dist_m;
+    float dt = 0.0f;
+
+    /* 逆运动学: 车体位移 → 四轮线位移 */
     ChassisSpeed_t ik_in  = {dx, dy, dt};
     WheelSpeed_t   ik_out;
     Kinematics_Inverse(&ik_in, &ik_out);
 
-    /* 四轮定位 */
+    /* 四轮定位 (SYNC_WAIT 模式, 全部发完再同步触发) */
     wheel_position(1, ik_out.v1);
-    osDelay(1);
     wheel_position(2, ik_out.v2);
-    osDelay(1);
     wheel_position(3, ik_out.v3);
-    osDelay(1);
     wheel_position(4, ik_out.v4);
-    osDelay(1);
 
     ZDT_SyncTrigger();
-    osDelay(1);
 }
 
 /* ====================================================================== */
@@ -111,9 +108,9 @@ int Chassis_SendMoveCmd(int16_t x, int16_t y, Event_t completion_event)
 int Chassis_SendRotateCmd(float degrees, Event_t completion_event)
 {
     if (chassis_queue == NULL) return -1;
-    /* degree → 百分之一弧度 (内部存储用, 陀螺仪反馈用 rad) */
-    int16_t centirad = (int16_t)(degrees * 3.14159265f / 180.0f * 100.0f);
-    ChassisMoveCmd_t cmd = { 0, 0, centirad, completion_event };
+    /* 旋转 PID 和 Z 轴陀螺仪反馈均使用角度制 */
+    int16_t centidegree = (int16_t)(degrees * 100.0f);
+    ChassisMoveCmd_t cmd = { 0, 0, centidegree, completion_event };
     if (xQueueSend(chassis_queue, &cmd, 0) == pdPASS) {
         dbg_cmd_sent++;
         return 0;
@@ -138,10 +135,40 @@ void Chassis_NotifyMoveComplete(void)
 /*  陀螺仪闭环旋转                                                        */
 /* ====================================================================== */
 
-/* --- 陀螺仪接口 (TODO: 替换为真实 IMU 驱动) --- */
-static float gyro_get_angle(void)
+/* --- 陀螺仪接口 (WitGyro WT901, Yaw 角度°) --- */
+static bool gyro_get_angle(float *angle)
 {
-    return Gimbal_GetAngle();   /* 暂用云台电机角度 */
+    float pitch, roll, yaw;
+    static float cached = 0.0f;
+    static float prev_raw = 0.0f;
+    static float unwrap_offset = 0.0f;
+    static uint32_t last_zero_generation = 0;
+    static bool valid = false;
+
+    if (WitGyro_GetAngle(&pitch, &roll, &yaw))
+    {
+        uint32_t zero_generation = WitGyro_GetZeroGeneration();
+
+        if (zero_generation != last_zero_generation) {
+            /* 软件零点变化时同步清除旧的解绕状态 */
+            prev_raw = yaw;
+            unwrap_offset = 0.0f;
+            cached = yaw;
+            last_zero_generation = zero_generation;
+        } else {
+            /* 解绕 yaw: 检测跨越 ±180° 的跳变, 累积连续角度 */
+            float delta = yaw - prev_raw;
+            if (delta > 180.0f)       unwrap_offset -= 360.0f;
+            else if (delta < -180.0f) unwrap_offset += 360.0f;
+            prev_raw = yaw;
+            cached = yaw + unwrap_offset;
+        }
+        valid = true;
+    }
+
+    if (!valid) return false;
+    *angle = cached;
+    return true;
 }
 
 /* --- 旋转 PID (使用 PID.h 组件) --- */
@@ -164,13 +191,13 @@ static void drive_rotation(float speed_rad_s)
     if (rpm < -150) rpm = -150;
 
     ZDT_SetVelocity(1, rpm > 0 ? ZDT_DIR_CW : ZDT_DIR_CCW,
-                    abs(rpm), 20, ZDT_SYNC_IMMEDIATE);
+                    abs(rpm), CONFIG_STEPPER_CHASSIS_ACCEL, ZDT_SYNC_IMMEDIATE);
     ZDT_SetVelocity(2, rpm > 0 ? ZDT_DIR_CCW : ZDT_DIR_CW,
-                    abs(rpm), 20, ZDT_SYNC_IMMEDIATE);
+                    abs(rpm), CONFIG_STEPPER_CHASSIS_ACCEL, ZDT_SYNC_IMMEDIATE);
     ZDT_SetVelocity(3, rpm > 0 ? ZDT_DIR_CCW : ZDT_DIR_CW,
-                    abs(rpm), 20, ZDT_SYNC_IMMEDIATE);
+                    abs(rpm), CONFIG_STEPPER_CHASSIS_ACCEL, ZDT_SYNC_IMMEDIATE);
     ZDT_SetVelocity(4, rpm > 0 ? ZDT_DIR_CW : ZDT_DIR_CCW,
-                    abs(rpm), 20, ZDT_SYNC_IMMEDIATE);
+                    abs(rpm), CONFIG_STEPPER_CHASSIS_ACCEL, ZDT_SYNC_IMMEDIATE);
     ZDT_SyncTrigger();
 }
 
@@ -190,7 +217,10 @@ static void MoveCheckTimerCallback(TimerHandle_t xTimer)
     /* ---- 旋转模式 (陀螺仪闭环) ---- */
     if (rotate_active)
     {
-        float current = gyro_get_angle();
+        float current;
+        if (!gyro_get_angle(&current)) {
+            return;             /* 首帧有效角度到达前不驱动电机 */
+        }
         float speed = PID_Update_float(&rotate_pid, current);
 
         /* 死区: 误差在死区内视为到位 */
@@ -246,14 +276,6 @@ static void MoveCheckTimerCallback(TimerHandle_t xTimer)
 void Chassis_Task(void *argument)
 {
     (void)argument;
-
-    /* 启动 FDCAN1 发送 (不过滤接收) */
-    HAL_FDCAN_Start(&hfdcan1);
-
-    ZDT_Enable(1);
-    ZDT_Enable(2);
-    ZDT_Enable(3);
-    ZDT_Enable(4);
 
     ChassisTaskHandle = xTaskGetCurrentTaskHandle();
 
@@ -322,6 +344,7 @@ void Chassis_TaskInit(void)
 {
     /* 队列必须在调度器启动前创建 */
     chassis_queue = xQueueCreate(CHASSIS_QUEUE_LEN, sizeof(ChassisMoveCmd_t));
+
     xTaskCreate(Chassis_Task, "chassitask", 256, NULL, osPriorityAboveNormal1, &ChassisTaskHandle);
 }
 

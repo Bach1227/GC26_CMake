@@ -18,7 +18,7 @@ extern "C" {
 typedef struct {
     int16_t x;                  /* X 位移 (mm) */
     int16_t y;                  /* Y 位移 (mm) */
-    int16_t rotation;           /* 旋转 (百分之一弧度, 仅平移+旋转时用) */
+    int16_t rotation;           /* 纯旋转时为 0.01°；平移+旋转时为 0.01 rad */
     Event_t completion_event;   /* 到位后发送的事件; EVENT_NONE = 不发 */
 } ChassisMoveCmd_t;
 

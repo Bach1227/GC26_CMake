@@ -17,6 +17,10 @@
 #include <stdint.h>
 #include "protocol.h"
 
+/* 通讯串口宏 — 修改这里切换协议串口 */
+#define COMM_UART_HANDLE    huart7
+#define COMM_UART_INSTANCE  UART7
+
 #ifdef __cplusplus
 extern "C" {
 #endif

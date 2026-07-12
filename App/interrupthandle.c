@@ -16,24 +16,15 @@
 #include "gimbal.h"
 #include <string.h>
 
+/* == WitGyro UART10 DMA 接收 (需在 RAM_D1, H7 DMA 无法访问 DTCM) == */
+__attribute__((section(".RAM_D1"))) uint8_t gyro_rx_buf[256];
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+void Gyro_UART_Start(void)
 {
-  if (htim->Instance == TIM8)
-  {
-    HAL_IncTick();
-  }
 
-  if (htim == &htim2)
-  {
-    /* code */
-  }
-
-  if (htim == &htim3)
-  {
-    /* code */
-  }
+  HAL_UARTEx_ReceiveToIdle_DMA(&GYRO_UART_HANDLE, gyro_rx_buf, sizeof(gyro_rx_buf));
 }
+
 
 uint8_t data[4] = { 0x01, 0x02, 0x03, 0x04 };
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
@@ -48,13 +39,19 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     // HAL_UARTEx_ReceiveToIdle_DMA(&huart1, dma_rx_buf, 256);
   }
 
-  if (huart == &huart7)
+  if (huart == &COMM_UART_HANDLE)
   {
 
     Comm_Depack(Size);
-    // HAL_UART_Transmit_DMA(&huart7, data, sizeof(data));
+    // HAL_UART_Transmit_DMA(&COMM_UART_HANDLE, data, sizeof(data));
     // osDelay(10);
-    HAL_UARTEx_ReceiveToIdle_DMA(&huart7, dma_rx_buf, 256);
+    HAL_UARTEx_ReceiveToIdle_DMA(&COMM_UART_HANDLE, dma_rx_buf, 256);
+  }
+
+  if (huart == &GYRO_UART_HANDLE)
+  {
+      WitGyro_Parse(gyro_rx_buf, Size);
+      HAL_UARTEx_ReceiveToIdle_DMA(&GYRO_UART_HANDLE, gyro_rx_buf, sizeof(gyro_rx_buf));
   }
 
 }
@@ -77,20 +74,27 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
         HAL_UARTEx_ReceiveToIdle_DMA(huart, dma_rx_buf, 256); 
     }
 
-  if (huart->Instance == UART7) // 替换为你实际使用的串口
+  if (huart->Instance == COMM_UART_INSTANCE) // 替换为你实际使用的串口
     {
         // 1. 获取错误代码
         uint32_t error_code = huart->ErrorCode;
-        
+
         // 2. 清除错误标志位 (根据不同的芯片系列，宏定义可能略有不同，如 __HAL_UART_CLEAR_OREFLAG)
         __HAL_UART_CLEAR_FLAG(huart, UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_PEF | UART_CLEAR_FEF);
-        
+
         // 3. 终止当前的错误传输状态
-        HAL_UART_AbortReceive_IT(huart); 
+        HAL_UART_AbortReceive_IT(huart);
         // 如果用的是 DMA，也可以用 HAL_UART_AbortReceive(huart);
-        
+
         // 4. 重新开启你的 Idle 接收
-        HAL_UARTEx_ReceiveToIdle_DMA(huart, dma_rx_buf, 256); 
+        HAL_UARTEx_ReceiveToIdle_DMA(huart, dma_rx_buf, 256);
+    }
+
+  if (huart->Instance == GYRO_UART_INSTANCE)
+    {
+        __HAL_UART_CLEAR_FLAG(huart, UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_PEF | UART_CLEAR_FEF);
+        HAL_UART_AbortReceive_IT(huart);
+        HAL_UARTEx_ReceiveToIdle_DMA(huart, gyro_rx_buf, sizeof(gyro_rx_buf));
     }
 }
 

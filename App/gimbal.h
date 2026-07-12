@@ -68,7 +68,7 @@ void Gimbal_CmdTask(void *argument);
 /** 伸长/收缩 (pulses > 0 = 伸出, < 0 = 缩回) */
 void Gimbal_Extend(int32_t pulses);
 
-/** 升降 (pulses > 0 = 上升, < 0 = 下降) */
+/** 升降（pulses > 0 上升，< 0 下降）；车体/底面行程由调用方选择配置宏。 */
 void Gimbal_Lift(int32_t pulses);
 
 /** 初始化夹爪 PWM (启动 TIM1 通道 3 输出) */

@@ -36,8 +36,7 @@ ProtocolFrame_t frame;
 /* 发送缓冲区 */
 static uint8_t tx_frame_buf[PROTOCOL_MIN_FRAME_LEN + PROTOCOL_MAX_PAYLOAD];
 
-extern DMA_HandleTypeDef hdma_usart1_rx;
-extern UART_HandleTypeDef huart7;
+extern UART_HandleTypeDef COMM_UART_HANDLE;
 
 void Comm_Task(void *argument);
 TaskHandle_t Comm_TaskHandle;
@@ -49,34 +48,34 @@ TaskHandle_t Comm_TaskHandle;
 void Comm_Init(void)
 {
     // RingBuffer_Init(&uart_rb, dma_rx_buf, DMA_RX_BUF_SIZE);
-    // HAL_UART_Receive_DMA(&huart7, dma_rx_buf, DMA_RX_BUF_SIZE);
-    // __HAL_UART_ENABLE_IT(&huart7, UART_IT_IDLE);
-    __HAL_UART_CLEAR_IDLEFLAG(&huart7);
+    // HAL_UART_Receive_DMA(&COMM_UART_HANDLE, dma_rx_buf, DMA_RX_BUF_SIZE);
+    // __HAL_UART_ENABLE_IT(&COMM_UART_HANDLE, UART_IT_IDLE);
+    __HAL_UART_CLEAR_IDLEFLAG(&COMM_UART_HANDLE);
     // 2. 清除可能残留的溢出、噪声等错误标志位
-    __HAL_UART_CLEAR_FLAG(&huart7, UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_PEF | UART_CLEAR_FEF);
+    __HAL_UART_CLEAR_FLAG(&COMM_UART_HANDLE, UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_PEF | UART_CLEAR_FEF);
 
     // 3. 延时等待电平彻底稳定（见下文说明）
     // HAL_Delay(50);
 
-    HAL_UARTEx_ReceiveToIdle_DMA(&huart7, dma_rx_buf, 256);
+    HAL_UARTEx_ReceiveToIdle_DMA(&COMM_UART_HANDLE, dma_rx_buf, 256);
 }
 
 void Comm_RestartRx(void)
 {
     /* 中止当前接收, 清理 DMA + UART 内部状态机 */
-    HAL_UART_AbortReceive(&huart7);
+    HAL_UART_AbortReceive(&COMM_UART_HANDLE);
 
     /* 清所有 UART 错误标志，否则会立即再次触发错误中断 */
-    __HAL_UART_CLEAR_FLAG(&huart7, UART_CLEAR_PEF);
-    __HAL_UART_CLEAR_FLAG(&huart7, UART_CLEAR_FEF);
-    __HAL_UART_CLEAR_FLAG(&huart7, UART_CLEAR_NEF);
-    __HAL_UART_CLEAR_FLAG(&huart7, UART_CLEAR_OREF);
+    __HAL_UART_CLEAR_FLAG(&COMM_UART_HANDLE, UART_CLEAR_PEF);
+    __HAL_UART_CLEAR_FLAG(&COMM_UART_HANDLE, UART_CLEAR_FEF);
+    __HAL_UART_CLEAR_FLAG(&COMM_UART_HANDLE, UART_CLEAR_NEF);
+    __HAL_UART_CLEAR_FLAG(&COMM_UART_HANDLE, UART_CLEAR_OREF);
 
     /* 重置环形缓冲区，丢弃错误前可能损坏的数据 */
     RingBuffer_Init(&uart_rb, dma_rx_buf, DMA_RX_BUF_SIZE);
 
     /* 重启 DMA + IDLE 接收 */
-    HAL_UARTEx_ReceiveToIdle_DMA(&huart7, dma_rx_buf, DMA_RX_BUF_SIZE);
+    HAL_UARTEx_ReceiveToIdle_DMA(&COMM_UART_HANDLE, dma_rx_buf, DMA_RX_BUF_SIZE);
 }
 
 /**
@@ -133,7 +132,7 @@ void Comm_Task(void *argument)
         //     Comm_RestartRx();
         // }
         // uint8_t data[4] = { 0x01, 0x02, 0x03, 0x04 };
-        // HAL_UART_Transmit(&huart7, data, sizeof(data), 10);
+        // HAL_UART_Transmit(&COMM_UART_HANDLE, data, sizeof(data), 10);
         osDelay(10);
     }
 }
@@ -146,7 +145,7 @@ uint16_t Comm_SendFrame(const uint8_t *data, uint16_t len)
 {
     if (data == NULL || len == 0) return 0;
 
-    HAL_StatusTypeDef status = HAL_UART_Transmit(&huart7, (uint8_t *)data,
+    HAL_StatusTypeDef status = HAL_UART_Transmit(&COMM_UART_HANDLE, (uint8_t *)data,
                                                   len, HAL_MAX_DELAY);
     return (status == HAL_OK) ? len : 0;
 }

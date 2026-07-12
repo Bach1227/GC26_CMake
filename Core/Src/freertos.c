@@ -30,7 +30,9 @@
 #include "comm_manager.h"
 #include "statemachine.h"
 #include "gimbal.h"
+#include "config.h"
 #include "fdcan.h"
+#include "bsp_zdt.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -53,10 +55,56 @@
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
-TaskHandle_t defaultTaskHandle;
+osThreadId_t defaultTaskHandle;
+const osThreadAttr_t defaultTask_attributes = {
+  .name = "defaultTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
+
+static volatile uint32_t g_zdt_init_fail_mask = 0;
+
+static HAL_StatusTypeDef ZDT_EnableBeforeTasks(uint8_t addr)
+{
+  for (uint8_t retry = 0; retry < 3; retry++)
+  {
+    if (ZDT_Enable(addr) == HAL_OK)
+    {
+      HAL_Delay(10);
+      return HAL_OK;
+    }
+    HAL_Delay(2);
+  }
+
+  g_zdt_init_fail_mask |= (1UL << addr);
+  return HAL_ERROR;
+}
+
+static void ZDT_PreTaskInit(void)
+{
+  ZDT_Init(&hfdcan1);
+
+#if !CONFIG_STEPPER_USE_UART1
+  if (HAL_FDCAN_Start(&hfdcan1) != HAL_OK)
+  {
+    g_zdt_init_fail_mask |= (1UL << 31);
+    return;
+  }
+#endif
+
+#if CONFIG_USE_CHASSIS
+  for (uint8_t addr = 1; addr <= 4; addr++)
+    ZDT_EnableBeforeTasks(addr);
+#endif
+
+#if CONFIG_USE_GIMBAL
+  ZDT_EnableBeforeTasks(5);
+  ZDT_EnableBeforeTasks(6);
+#endif
+}
 
 /* USER CODE END FunctionPrototypes */
 
@@ -71,7 +119,8 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
-
+  /* 在创建任何业务任务前启动总线并依次使能全部 ZDT 电机。 */
+  ZDT_PreTaskInit();
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -92,14 +141,17 @@ void MX_FREERTOS_Init(void) {
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  // xTaskCreate(StartDefaultTask, "defaultTask", 128, NULL, osPriorityNormal, &defaultTaskHandle);
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
-  HAL_FDCAN_Start(&hfdcan1);          /* 启动 FDCAN1 */
+#if CONFIG_USE_CHASSIS
   Chassis_TaskInit();
+#endif
   Comm_InitTask();
+#if CONFIG_USE_GIMBAL
   Gimbal_InitTask();                  /* 启动云台电机 J4310 角度闭环 (1kHz PID) */
+#endif
   SM_Init();
   /* USER CODE END RTOS_THREADS */
 

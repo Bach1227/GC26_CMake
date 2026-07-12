@@ -29,6 +29,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "comm_manager.h"
+#include "interrupthandle.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -102,8 +103,13 @@ int main(void)
   MX_TIM3_Init();
   MX_UART7_Init();
   MX_TIM1_Init();
+  MX_USART10_UART_Init();
   /* USER CODE BEGIN 2 */
   Comm_Init();
+
+  /* 第一帧有效 Z 轴角度由驱动自动记录为软件零点 */
+  WitGyro_Init();
+  Gyro_UART_Start();
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -197,19 +203,19 @@ void SystemClock_Config(void)
   * @param  htim : TIM handle
   * @retval None
   */
-// void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-// {
-//   /* USER CODE BEGIN Callback 0 */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
 
-//   /* USER CODE END Callback 0 */
-//   if (htim->Instance == TIM8)
-//   {
-//     HAL_IncTick();
-//   }
-//   /* USER CODE BEGIN Callback 1 */
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM8)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
 
-//   /* USER CODE END Callback 1 */
-// }
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.

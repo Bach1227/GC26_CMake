@@ -1,10 +1,15 @@
 #include "statemachine.h"
+#include "config.h"
 #include "cmsis_os2.h"
 #include "FreeRTOS.h"
 #include "queue.h"
 
 #include "ChassisControl.h"
+
+#ifdef USE_GIMBAL
 #include "Gimbal.h"
+#endif
+
 #include "protocol.h"
 #include <math.h>
 
@@ -26,34 +31,20 @@ static QueueHandle_t sm_queue = NULL;
 
 uint8_t seq[3] = {2, 3, 1};
 
-/* ====================================================================== */
-/*  颜色校验                                                              */
-/* ====================================================================== */
-
-/* 期望颜色表: 按位置索引, [1]=蓝, [2]=红, [3]=绿 */
+/* 颜色校验 (被 protocol.c 和 gimbal.c 引用, 始终定义) */
 const uint8_t expected_color[4] = {0, 2, 1, 3};
-
-/* 共享变量: 由 Protocol_Dispatch 写入, 状态机轮询 */
 volatile ColorConfirm_t g_color_result = {0};
 volatile bool           g_color_pending = false;
 
-/* ====================================================================== */
-/*  伸长距离                                                              */
-/* ====================================================================== */
+#ifdef USE_GIMBAL
 
+/* 伸长距离 */
 #define PICKUP_EXTEND  500
 #define PLACE_EXTEND   300
 #define EXTEND_DIFF    (PICKUP_EXTEND - PLACE_EXTEND)  /* 200 */
-
-/* 车身位伸出距离 (3个位置相同) */
 #define CAR_EXTEND      300
-/* 地图工位伸出距离: 2最短, 1/3相同 */
 #define MAP_EXTEND_1_3  400
 #define MAP_EXTEND_2    200
-
-/* ====================================================================== */
-/*  辅助函数                                                              */
-/* ====================================================================== */
 
 static int32_t map_extend(uint8_t pos) {
     return (pos == 2) ? MAP_EXTEND_2 : MAP_EXTEND_1_3;
@@ -62,8 +53,35 @@ static int32_t map_extend(uint8_t pos) {
 static void Gripper_Close(void) { Gimbal_Gripper(30000); }
 static void Gripper_Open(void)  { Gimbal_Gripper(0); }
 
+static bool wait_expected_color(uint8_t pos)
+{
+#if CONFIG_SKIP_COLOR_CONFIRM
+    (void)pos;
+    return true;
+#else
+    g_color_pending = true;
+    while (g_color_pending)
+        osDelay(10);
+    return g_color_result.color == expected_color[pos];
+#endif
+}
+
+#endif /* USE_GIMBAL */
+
 /* 前向声明 */
 static void SM_Task(void *argument);
+
+static void SM_ChassisMove(int16_t x, int16_t y, Event_t completion_event)
+{
+#if CONFIG_USE_CHASSIS
+    Chassis_SendMoveCmd(x, y, completion_event);
+#else
+    (void)x;
+    (void)y;
+    if (completion_event != EVENT_NONE)
+        SM_SendEvent(completion_event);
+#endif
+}
 
 /* ====================================================================== */
 /*  动作函数                                                              */
@@ -71,15 +89,15 @@ static void SM_Task(void *argument);
 
 static void Action_Nop(void)
 {
+    SM_SendEvent(EVENT_ADJUST_DONE);
 }
 
 /* ---- 初始化与准备 ---- */
 
 static void Action_Start(void)
 {
-    Chassis_SendMoveCmd(50, -50, EVENT_NONE);      /* 中间点 */
-    Gimbal_Extend(500);
-    Chassis_SendMoveCmd(300, 0, EVENT_ARRIVED);    /* 到 QR 位 */
+    SM_ChassisMove(50, 50, EVENT_NONE);      /* 中间点 */
+    SM_ChassisMove(300, 0, EVENT_ARRIVED);    /* 到 QR 位 */
 }
 
 static void Action_ParseQR(void)
@@ -90,47 +108,60 @@ static void Action_ParseQR(void)
 
 /* ---- 第一批次 ---- */
 
-/* 车体上的 3 个角度 (1=180°, 2=220°, 3=260°) */
+#ifdef USE_GIMBAL
+
+/* 车体上的 3 个物料位置角度 */
 static float car_angle(uint8_t pos)
 {
     float deg;
-    if (pos == 1)      deg = 180.0f;
-    else if (pos == 2) deg = 220.0f;
-    else               deg = 260.0f;
+    if (pos == 1)      deg = CONFIG_CAR_MATERIAL_POS_1_DEG;
+    else if (pos == 2) deg = CONFIG_CAR_MATERIAL_POS_2_DEG;
+    else               deg = CONFIG_CAR_MATERIAL_POS_3_DEG;
     if (deg > 180.0f) deg -= 360.0f;
     return deg;
 }
 
-/* 地图上对应工位的 3 个角度 (TODO: 填入实际值) */
+/* 地图上对应工位的 3 个物料位置角度 */
 static float map_angle(uint8_t pos)
 {
     float deg;
-    if (pos == 1)      deg = 30.0f;    /* TODO */
-    else if (pos == 2) deg = 0.0f;    /* TODO */
-    else               deg = -30.0f;    /* TODO */
+    if (pos == 1)      deg = CONFIG_MAP_MATERIAL_POS_1_DEG;
+    else if (pos == 2) deg = CONFIG_MAP_MATERIAL_POS_2_DEG;
+    else               deg = CONFIG_MAP_MATERIAL_POS_3_DEG;
     return deg;
 }
 
+#endif /* USE_GIMBAL */
+
 static void Action_MoveToRaw1(void)
 {
-    Chassis_SendMoveCmd(800, 0, EVENT_ARRIVED);
+    SM_ChassisMove(800, 0, EVENT_ARRIVED);
+#ifdef USE_GIMBAL
+    /* 前往原料区途中将云台从内收位折到地图中间位。 */
+    Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
+#endif
 }
 
 static void Action_FetchRaw1(void)
 {
+#ifdef USE_GIMBAL
     GimbalCmd_t cmd = {GIMBAL_CMD_FETCH_RAW, EVENT_ACTION_DONE};
     Gimbal_SendCmd(&cmd);
+#else
+    SM_SendEvent(EVENT_ACTION_DONE);
+#endif
 }
 
 static void Action_MoveToRough1(void)
 {
-    Chassis_SendMoveCmd(-400, 0, EVENT_NONE);        /* 左移到主干道 */
-    Chassis_SendRotateCmd(90.0f, EVENT_NONE);         /* 逆时针转180° (陀螺仪闭环) */
-    Chassis_SendMoveCmd(0, 1800, EVENT_ARRIVED);      /* 直行到粗加工区 */
+    SM_ChassisMove(-400, 0, EVENT_NONE);        /* 左移到主干道 */
+    // Chassis_SendRotateCmd(90.0f, EVENT_NONE);         /* 逆时针转180° (陀螺仪闭环) */
+    SM_ChassisMove(0, 1800, EVENT_ARRIVED);      /* 直行到粗加工区 */
 }
 
 static void Action_PlaceRough1(void)
 {
+#ifdef USE_GIMBAL
     /* 从车身取料 → 放到粗加工区 */
     for (int i = 0; i < 3; i++)
     {
@@ -142,11 +173,11 @@ static void Action_PlaceRough1(void)
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gripper_Close();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
@@ -160,11 +191,11 @@ static void Action_PlaceRough1(void)
         int32_t m_ext = map_extend(seq[i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gripper_Open();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gimbal_Extend(-m_ext);
         osDelay(100);
@@ -182,11 +213,11 @@ static void Action_PlaceRough1(void)
         int32_t m_ext = map_extend(seq[i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gripper_Close();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gimbal_Extend(-m_ext);
         osDelay(100);
@@ -199,11 +230,11 @@ static void Action_PlaceRough1(void)
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gripper_Open();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
@@ -211,16 +242,20 @@ static void Action_PlaceRough1(void)
 
     Gimbal_SetAngle(0);
     SM_SendEvent(EVENT_ACTION_DONE);
+#else
+    SM_SendEvent(EVENT_ACTION_DONE);
+#endif
 }
 
 static void Action_MoveToTemp1(void)
 {
-    Chassis_SendMoveCmd(1000, 0, EVENT_NONE);
-    Chassis_SendMoveCmd(0, 1000, EVENT_ARRIVED);
+    SM_ChassisMove(1000, 0, EVENT_NONE);
+    SM_ChassisMove(0, -1000, EVENT_ARRIVED);
 }
 
 static void Action_PlaceTemp1(void)
 {
+#ifdef USE_GIMBAL
     /* 从车身取料 → 放到暂存区 (不回取) */
     for (int i = 0; i < 3; i++)
     {
@@ -232,11 +267,11 @@ static void Action_PlaceTemp1(void)
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gripper_Close();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
@@ -250,46 +285,46 @@ static void Action_PlaceTemp1(void)
         int32_t m_ext = map_extend(seq[i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gripper_Open();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gimbal_Extend(-m_ext);
         osDelay(100);
     }
     Gimbal_SetAngle(0.0f);
     SM_SendEvent(EVENT_ACTION_DONE);
+#else
+    SM_SendEvent(EVENT_ACTION_DONE);
+#endif
 }
 
 /* ---- 第二批次 ---- */
 
 static void Action_MoveToRaw2(void)
 {
-    Chassis_SendMoveCmd(0, 500, EVENT_NONE);
-    Chassis_SendMoveCmd(-500, 0, EVENT_ARRIVED);
+    SM_ChassisMove(0, 500, EVENT_NONE);
+    SM_ChassisMove(-500, 0, EVENT_ARRIVED);
 }
 
 static void Action_FetchRaw2(void)
 {
+#ifdef USE_GIMBAL
     /* 同第一批: 伸出→等颜色→夹取→转放料位→释放→归零 */
     Gimbal_Extend(PICKUP_EXTEND);
     osDelay(100);
 
     for (int i = 0; i < 3; i++)
     {
-        g_color_pending = true;
-        while (g_color_pending)
-            osDelay(10);
-
-        if (g_color_result.color == expected_color[seq[i]])
+        if (wait_expected_color(seq[i]))
         {
-            Gimbal_Lift(-200);
+            Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
             osDelay(100);
             Gripper_Close();
             osDelay(200);
-            Gimbal_Lift(200);
+            Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
             osDelay(100);
         }
 
@@ -300,11 +335,11 @@ static void Action_FetchRaw2(void)
         while (fabsf(Gimbal_GetAngle() - angle) > 1.0f)
             osDelay(10);
 
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gripper_Open();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
 
         Gimbal_Extend(EXTEND_DIFF);
@@ -318,16 +353,20 @@ static void Action_FetchRaw2(void)
     osDelay(100);
 
     SM_SendEvent(EVENT_ACTION_DONE);
+#else
+    SM_SendEvent(EVENT_ACTION_DONE);
+#endif
 }
 
 static void Action_MoveToRough2(void)
 {
-    Chassis_SendMoveCmd(-400, 0, EVENT_NONE);
-    Chassis_SendMoveCmd(0, -1800, EVENT_ARRIVED);
+    SM_ChassisMove(-400, 0, EVENT_NONE);
+    SM_ChassisMove(0, -1800, EVENT_ARRIVED);
 }
 
 static void Action_PlaceRough2(void)
 {
+#ifdef USE_GIMBAL
     /* 从车身取料 → 放到粗加工区 */
     for (int i = 0; i < 3; i++)
     {
@@ -338,11 +377,11 @@ static void Action_PlaceRough2(void)
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gripper_Close();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
@@ -355,11 +394,11 @@ static void Action_PlaceRough2(void)
         int32_t m_ext = map_extend(seq[i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gripper_Open();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gimbal_Extend(-m_ext);
         osDelay(100);
@@ -376,11 +415,11 @@ static void Action_PlaceRough2(void)
         int32_t m_ext = map_extend(seq[i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gripper_Close();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gimbal_Extend(-m_ext);
         osDelay(100);
@@ -392,11 +431,11 @@ static void Action_PlaceRough2(void)
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gripper_Open();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
@@ -404,16 +443,20 @@ static void Action_PlaceRough2(void)
 
     Gimbal_SetAngle(0.0f);
     SM_SendEvent(EVENT_ACTION_DONE);
+#else
+    SM_SendEvent(EVENT_ACTION_DONE);
+#endif
 }
 
 static void Action_MoveToTemp2(void)
 {
-    Chassis_SendMoveCmd(1000, 0, EVENT_NONE);
-    Chassis_SendMoveCmd(0, -1000, EVENT_ARRIVED);
+    SM_ChassisMove(1000, 0, EVENT_NONE);
+    SM_ChassisMove(0, -1000, EVENT_ARRIVED);
 }
 
 static void Action_StackTemp2(void)
 {
+#ifdef USE_GIMBAL
     /* 从车身取料 → 放到暂存区码垛 (不回取) */
     for (int i = 0; i < 3; i++)
     {
@@ -424,11 +467,11 @@ static void Action_StackTemp2(void)
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gripper_Close();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(100);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
@@ -441,25 +484,28 @@ static void Action_StackTemp2(void)
         int32_t m_ext = map_extend(seq[i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
-        Gimbal_Lift(-200);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gripper_Open();
         osDelay(200);
-        Gimbal_Lift(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(100);
         Gimbal_Extend(-m_ext);
         osDelay(100);
     }
     Gimbal_SetAngle(0.0f);
     SM_SendEvent(EVENT_ACTION_DONE);
+#else
+    SM_SendEvent(EVENT_ACTION_DONE);
+#endif
 }
 
 /* ---- 收尾 ---- */
 
 static void Action_ReturnStart(void)
 {
-    Chassis_SendMoveCmd(0, 800, EVENT_NONE);
-    Chassis_SendMoveCmd(-1600, 0, EVENT_ARRIVED);
+    SM_ChassisMove(0, 800, EVENT_NONE);
+    SM_ChassisMove(-1600, 0, EVENT_ARRIVED);
 }
 
 /* ====================================================================== */

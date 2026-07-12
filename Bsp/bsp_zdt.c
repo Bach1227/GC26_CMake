@@ -1,4 +1,6 @@
 #include "bsp_zdt.h"
+#include "config.h"
+#include "Emm_V5.h"
 #include "bsp_can.h"
 #include "cmsis_os2.h"
 
@@ -119,50 +121,85 @@ void ZDT_ClearMoveDone(uint8_t addr)
 
 HAL_StatusTypeDef ZDT_Enable(uint8_t addr)
 {
+#if CONFIG_STEPPER_USE_UART1
+    Emm_V5_En_Control(addr, true, false);
+    return HAL_OK;
+#else
     uint8_t buf[] = { ZDT_FC_ENABLE_CTL, ZDT_SUBCODE_ENABLE, 0x01, 0x00 };
     buf[3] = ZDT_CHECKSUM;
     return ZDT_SendFrame(addr, 0, buf, 4);
+#endif
 }
 
 HAL_StatusTypeDef ZDT_Disable(uint8_t addr)
 {
+#if CONFIG_STEPPER_USE_UART1
+    Emm_V5_En_Control(addr, false, false);
+    return HAL_OK;
+#else
     uint8_t buf[] = { ZDT_FC_ENABLE_CTL, ZDT_SUBCODE_ENABLE, 0x00, 0x00 };
     buf[3] = ZDT_CHECKSUM;
     return ZDT_SendFrame(addr, 0, buf, 4);
+#endif
 }
 
 HAL_StatusTypeDef ZDT_Stop(uint8_t addr)
 {
+#if CONFIG_STEPPER_USE_UART1
+    Emm_V5_Stop_Now(addr, false);
+    return HAL_OK;
+#else
     uint8_t buf[] = { ZDT_FC_STOP, ZDT_SUBCODE_STOP, 0x00 };
     buf[2] = ZDT_CHECKSUM;
     return ZDT_SendFrame(addr, 0, buf, 3);
+#endif
 }
 
 HAL_StatusTypeDef ZDT_SyncTrigger(void)
 {
+#if CONFIG_STEPPER_USE_UART1
+    Emm_V5_Synchronous_motion(0);
+    return HAL_OK;
+#else
     uint8_t buf[] = { ZDT_FC_SYNC, 0x66, 0x00 };
     buf[2] = ZDT_CHECKSUM;
     return ZDT_SendFrame(ZDT_ADDR_BROADCAST, 0, buf, 3);
+#endif
 }
 
 HAL_StatusTypeDef ZDT_ReadPosition(uint8_t addr)
 {
+#if CONFIG_STEPPER_USE_UART1
+    Emm_V5_Read_Sys_Params(addr, S_CPOS);
+    return HAL_OK;
+#else
     uint8_t buf[] = { ZDT_FC_READ_POS, 0x00 };
     buf[1] = ZDT_CHECKSUM;
     return ZDT_SendFrame(addr, 0, buf, 2);
+#endif
 }
 
 HAL_StatusTypeDef ZDT_ReadStatus(uint8_t addr)
 {
+#if CONFIG_STEPPER_USE_UART1
+    Emm_V5_Read_Sys_Params(addr, S_FLAG);
+    return HAL_OK;
+#else
     uint8_t buf[] = { ZDT_FC_READ_STATUS, 0x00 };
     buf[1] = ZDT_CHECKSUM;
     return ZDT_SendFrame(addr, 0, buf, 2);
+#endif
 }
 
 HAL_StatusTypeDef ZDT_SetVelocity(uint8_t addr, uint8_t dir,
                                    uint16_t speed_rpm, uint8_t accel,
                                    uint8_t sync_flag)
 {
+#if CONFIG_STEPPER_USE_UART1
+    Emm_V5_Vel_Control(addr, dir, speed_rpm, accel,
+                       sync_flag == ZDT_SYNC_WAIT);
+    return HAL_OK;
+#else
     uint8_t buf[7] = {
         ZDT_FC_VELOCITY, dir,
         (uint8_t)(speed_rpm >> 8),
@@ -171,6 +208,7 @@ HAL_StatusTypeDef ZDT_SetVelocity(uint8_t addr, uint8_t dir,
     };
     buf[6] = ZDT_CHECKSUM;
     return ZDT_SendFrame(addr, 0, buf, 7);
+#endif
 }
 
 HAL_StatusTypeDef ZDT_SetPosition(uint8_t addr, uint8_t dir,
@@ -178,6 +216,13 @@ HAL_StatusTypeDef ZDT_SetPosition(uint8_t addr, uint8_t dir,
                                    int32_t pulses, uint8_t rel_abs,
                                    uint8_t sync_flag)
 {
+#if CONFIG_STEPPER_USE_UART1
+    if (pulses < 0) pulses = -pulses;
+    Emm_V5_Pos_Control(addr, dir, speed_rpm, accel, (uint32_t)pulses,
+                       rel_abs == ZDT_POS_ABSOLUTE,
+                       sync_flag == ZDT_SYNC_WAIT);
+    return HAL_OK;
+#else
     uint8_t pkt0[7] = {
         ZDT_FC_POSITION, dir,
         (uint8_t)(speed_rpm >> 8),
@@ -197,4 +242,5 @@ HAL_StatusTypeDef ZDT_SetPosition(uint8_t addr, uint8_t dir,
 
     if (ZDT_SendFrame(addr, 0, pkt0, 7) != HAL_OK) return HAL_ERROR;
     return ZDT_SendFrame(addr, 1, pkt1, 6);
+#endif
 }

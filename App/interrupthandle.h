@@ -11,10 +11,15 @@
 #define __INTERRUPTHANDLE_H__
 
 #include <stdint.h>
+#include "bsp_witgyro.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+extern uint8_t gyro_rx_buf[256];
+
+void Gyro_UART_Start(void);
 
 #ifdef __cplusplus
 }

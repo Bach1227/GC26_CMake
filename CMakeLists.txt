@@ -47,7 +47,9 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Bsp/bsp_can.c
     Bsp/bsp_zdt.c
+    Bsp/Emm_V5.c
     Bsp/bsp_dm.c
+    Bsp/bsp_witgyro.c
     App/protocol.c
     App/MoveControl.c
     App/interrupthandle.c

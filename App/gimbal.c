@@ -1,4 +1,5 @@
 #include "gimbal.h"
+#include "config.h"
 #include "bsp_dm.h"
 #include "bsp_zdt.h"
 #include "bsp_can.h"
@@ -28,8 +29,8 @@ extern const uint8_t expected_color[4];
 #define ANGLE_TARGET_DEFAULT 0.0f       /* 默认目标 180° */
 
 /* PID (角度° → 速度) */
-#define PID_Kp              0.02f
-#define PID_Ki              0.001f
+#define PID_Kp              0.03f
+#define PID_Ki              0.002f
 #define PID_Kd              0.0f
 #define SPEED_LIMIT         6.0f          /* 输出上限 */
 #define INTEGRAL_RANGE      30.0f         /* ° */
@@ -46,9 +47,6 @@ extern const uint8_t expected_color[4];
 
 #define ZDT_ID_EXTEND       5u          /* 伸长电机 CAN 地址 */
 #define ZDT_ID_LIFT         6u          /* 升降电机 CAN 地址 */
-#define ZDT_SPEED_RPM       200         /* ZDT 运行速度 */
-#define ZDT_ACCEL           128         /* ZDT 加速度 */
-
 /* ====================================================================== */
 /*  内部变量                                                              */
 /* ====================================================================== */
@@ -59,6 +57,11 @@ static bool                   g_inited = false;
 PID_Param_float g_pid;
 float           g_target_angle = ANGLE_TARGET_DEFAULT;
 bool            g_pid_inited   = false;
+
+/* 将电机的 ±180° 周期反馈解绕为相对当前电机零点的连续角度。 */
+static volatile float   g_continuous_angle = 0.0f;
+static volatile float   g_prev_wrapped_angle = 0.0f;
+static volatile uint8_t g_angle_tracking_valid = 0;
 
 /* ====================================================================== */
 /*  Gimbal_Init                                                           */
@@ -90,6 +93,23 @@ void Gimbal_OnCanRx(FDCAN_HandleTypeDef *hfdcan, FDCAN_RxFrame_t *frame)
     if ((frame->ID & 0xFFFF) == MOTOR_RX_ID)
     {
         DM_J4310_MIT_Parse(&g_motor, frame->data);
+
+        float wrapped = g_motor.Status.position_angle;
+        if (!g_angle_tracking_valid)
+        {
+            g_prev_wrapped_angle = wrapped;
+            g_continuous_angle = wrapped;
+            g_angle_tracking_valid = 1;
+        }
+        else
+        {
+            float delta = wrapped - g_prev_wrapped_angle;
+            if (delta > 180.0f)       delta -= 360.0f;
+            else if (delta < -180.0f) delta += 360.0f;
+
+            g_continuous_angle += delta;
+            g_prev_wrapped_angle = wrapped;
+        }
     }
 }
 
@@ -97,16 +117,27 @@ void Gimbal_OnCanRx(FDCAN_HandleTypeDef *hfdcan, FDCAN_RxFrame_t *frame)
 /*  Gimbal_SetAngle / Gimbal_GetAngle                                     */
 /* ====================================================================== */
 
+static float clamp_gimbal_angle(float angle_deg)
+{
+#if CONFIG_GIMBAL_SINGLE_TURN_ENABLE
+    if (angle_deg < CONFIG_GIMBAL_TURN_MIN_DEG)
+        return CONFIG_GIMBAL_TURN_MIN_DEG;
+    if (angle_deg > CONFIG_GIMBAL_TURN_MAX_DEG)
+        return CONFIG_GIMBAL_TURN_MAX_DEG;
+#endif
+    return angle_deg;
+}
+
 void Gimbal_SetAngle(float angle_deg)
 {
-    g_target_angle = angle_deg;
+    g_target_angle = clamp_gimbal_angle(angle_deg);
     if (g_pid_inited)
         PID_Set_Target_float(&g_pid, g_target_angle);
 }
 
 float Gimbal_GetAngle(void)
 {
-    return g_motor.Status.position_angle;
+    return g_continuous_angle;
 }
 
 /* ====================================================================== */
@@ -142,12 +173,15 @@ void Gimbal_Task(void *argument)
 
     DM_Motor_Enable(&hfdcan2, MOTOR_TX_ID);
     osDelay(100);
+
+#if CONFIG_DM_RESET_ZERO_ON_BOOT
     DM_Motor_SetZero(&hfdcan2, MOTOR_TX_ID);
     osDelay(50);
 
-    /* 使能 ZDT 直线动作电机 (伸长/升降) */
-    ZDT_Enable(ZDT_ID_EXTEND);
-    ZDT_Enable(ZDT_ID_LIFT);
+    /* 设零后的下一帧作为连续角度跟踪起点。 */
+    g_continuous_angle = 0.0f;
+    g_angle_tracking_valid = 0;
+#endif
 
     DM_Motor_MIT_Struct mit = {
         .position_angle = 0.0f,
@@ -159,18 +193,29 @@ void Gimbal_Task(void *argument)
 
     for (;;)
     {
-        float current = g_motor.Status.position_angle;
+#if CONFIG_DM_SLOW_ROTATE_TEST
+        /* MIT 速度模式: kp=0，由 kd 对速度误差提供阻尼/转矩。 */
+        mit.velocity_rad_s = CONFIG_DM_SLOW_ROTATE_SPEED;
+#else
+        float current = g_continuous_angle;
         float target  = g_target_angle;
 
-        /* 归一化: 让 target 到 current 的误差在 ±180° 内 */
-        float error = target - current;
-        if (error > 180.0f)  target -= 360.0f;
-        if (error < -180.0f) target += 360.0f;
-
+        /* 连续角度直接闭环，不允许周期角度折返后累计出第二圈。 */
         PID_Set_Target_float(&g_pid, target);
         float speed = PID_Update_float(&g_pid, current);
 
         mit.velocity_rad_s = speed;
+#endif
+
+#if CONFIG_GIMBAL_SINGLE_TURN_ENABLE
+        /* 即使目标或测试速度异常，也禁止累计角度驶入第二圈。 */
+        float limit_angle = g_continuous_angle;
+        if ((limit_angle <= CONFIG_GIMBAL_TURN_MIN_DEG && mit.velocity_rad_s < 0.0f) ||
+            (limit_angle >= CONFIG_GIMBAL_TURN_MAX_DEG && mit.velocity_rad_s > 0.0f))
+        {
+            mit.velocity_rad_s = 0.0f;
+        }
+#endif
         DM_J4310_MIT_Send(&hfdcan2, MOTOR_TX_ID, &mit);
 
         osDelay(CTRL_PERIOD_MS);
@@ -185,12 +230,16 @@ static void zdt_move(uint8_t id, int32_t pulses)
 {
     if (pulses == 0) return;
 
-    uint8_t  dir  = (pulses > 0) ? ZDT_DIR_CW : ZDT_DIR_CCW;
-    uint16_t rpm = (uint16_t)((pulses > 0) ? pulses : -pulses);
-    if (rpm > ZDT_SPEED_RPM) rpm = ZDT_SPEED_RPM;
+    uint8_t dir = (pulses > 0) ? ZDT_DIR_CW : ZDT_DIR_CCW;
+    uint16_t rpm = (id == ZDT_ID_LIFT)
+                 ? CONFIG_STEPPER_LIFT_SPEED_RPM
+                 : CONFIG_STEPPER_EXTEND_SPEED_RPM;
+    uint8_t accel = (id == ZDT_ID_LIFT)
+                  ? CONFIG_STEPPER_LIFT_ACCEL
+                  : CONFIG_STEPPER_EXTEND_ACCEL;
     if (pulses < 0) pulses = -pulses;
 
-    ZDT_SetPosition(id, dir, rpm, ZDT_ACCEL, pulses,
+    ZDT_SetPosition(id, dir, rpm, accel, pulses,
                     ZDT_POS_RELATIVE, ZDT_SYNC_IMMEDIATE);
 }
 
@@ -230,28 +279,42 @@ void Gimbal_Gripper(uint32_t pulse)
 static float fetch_car_angle(uint8_t pos)
 {
     float deg;
-    if (pos == 1)      deg = 180.0f;
-    else if (pos == 2) deg = 220.0f;
-    else               deg = 260.0f;
+    if (pos == 1)      deg = CONFIG_CAR_MATERIAL_POS_1_DEG;
+    else if (pos == 2) deg = CONFIG_CAR_MATERIAL_POS_2_DEG;
+    else               deg = CONFIG_CAR_MATERIAL_POS_3_DEG;
     if (deg > 180.0f) deg -= 360.0f;
     return deg;
 }
 
+static bool wait_expected_color(uint8_t pos)
+{
+#if CONFIG_SKIP_COLOR_CONFIRM
+    (void)pos;
+    return true;
+#else
+    g_color_pending = true;
+    while (g_color_pending) osDelay(10);
+    return g_color_result.color == expected_color[pos];
+#endif
+}
+
 static void ExecFetchRaw(Event_t done_event)
 {
+    // ZDT_SetVelocity(ZDT_ID_LIFT, ZDT_DIR_CW,
+    //                 CONFIG_STEPPER_LIFT_SPEED_RPM,
+    //                 CONFIG_STEPPER_LIFT_ACCEL,
+    //                 ZDT_SYNC_IMMEDIATE);
+
     Gimbal_Extend(FETCH_PICKUP_EXTEND);
     osDelay(100);
 
     for (int i = 0; i < 3; i++)
     {
-        g_color_pending = true;
-        while (g_color_pending) osDelay(10);
-
-        if (g_color_result.color == expected_color[seq[i]])
+        if (wait_expected_color(seq[i]))
         {
-            Gimbal_Lift(-200); osDelay(100);
+            Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES); osDelay(2000);
             Gimbal_Gripper(30000); osDelay(200);
-            Gimbal_Lift(200); osDelay(100);
+            Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES); osDelay(2000);
         }
 
         Gimbal_Extend(-FETCH_EXTEND_DIFF); osDelay(100);
@@ -259,17 +322,20 @@ static void ExecFetchRaw(Event_t done_event)
         Gimbal_SetAngle(angle);
         while (fabsf(Gimbal_GetAngle() - angle) > 1.0f) osDelay(10);
 
-        Gimbal_Lift(-200); osDelay(100);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES); osDelay(2000);
         Gimbal_Gripper(0); osDelay(200);
-        Gimbal_Lift(200); osDelay(100);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES); osDelay(2000);
 
         Gimbal_Extend(FETCH_EXTEND_DIFF); osDelay(100);
-        Gimbal_SetAngle(0.0f);
-        while (fabsf(Gimbal_GetAngle()) > 1.0f) osDelay(10);
+        float folded_angle = CONFIG_MAP_MATERIAL_POS_2_DEG;
+        Gimbal_SetAngle(folded_angle);
+        while (fabsf(Gimbal_GetAngle() - folded_angle) > 1.0f) osDelay(10);
     }
 
     Gimbal_Extend(-FETCH_PICKUP_EXTEND);
     osDelay(100);
+
+
 
     SM_SendEvent(done_event);
 }
