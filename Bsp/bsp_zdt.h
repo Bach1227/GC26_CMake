@@ -61,6 +61,13 @@ typedef struct {
     bool     move_done;        /* 电机到位标志 (FD+9F 回传时置 true) */
 } ZDT_MotorStatus_t;
 
+typedef struct {
+    uint8_t  addr;
+    uint8_t  dir;
+    uint16_t speed_rpm;
+    uint8_t  accel;
+} ZDT_VelocityCommand_t;
+
 /* API */
 
 void ZDT_Init(FDCAN_HandleTypeDef *hfdcan);
@@ -77,6 +84,15 @@ HAL_StatusTypeDef ZDT_SyncTrigger(void);
 HAL_StatusTypeDef ZDT_SetVelocity(uint8_t addr, uint8_t dir,
                                    uint16_t speed_rpm, uint8_t accel,
                                    uint8_t sync_flag);
+
+/** 原子发送多台电机速度帧，并在全部成功后发送一次同步触发。 */
+HAL_StatusTypeDef ZDT_SetVelocitySyncBatch(
+                                   const ZDT_VelocityCommand_t *commands,
+                                   uint8_t count, uint32_t timeout_ms);
+
+/** 原子发送多台电机立即停止帧；UART 模式下失败时自动重试。 */
+HAL_StatusTypeDef ZDT_StopBatch(const uint8_t *addresses, uint8_t count,
+                                uint32_t timeout_ms);
 
 HAL_StatusTypeDef ZDT_SetPosition(uint8_t addr, uint8_t dir,
                                    uint16_t speed_rpm, uint8_t accel,

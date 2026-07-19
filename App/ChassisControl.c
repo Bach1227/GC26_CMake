@@ -1,103 +1,387 @@
 #include "ChassisControl.h"
 #include "config.h"
 #include "bsp_zdt.h"
-#include "bsp_can.h"
 #include "bsp_witgyro.h"
-#include "MoveControl.h"
 #include "cmsis_os2.h"
-#include <math.h>
-#include <string.h>
 #include "PID.h"
 #include "queue.h"
 #include "timers.h"
-#include <stdlib.h>
+#include <limits.h>
+#include <math.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 /* ====================================================================== */
-/*  常量                                                                  */
+/*  Command queue and control state                                       */
 /* ====================================================================== */
 
-#define WHEEL_RADIUS     0.075f
-#define PULSES_PER_REV   2000
-#define POS_SPEED_RPM    CONFIG_STEPPER_CHASSIS_SPEED_RPM
-#define POS_ACCEL        CONFIG_STEPPER_CHASSIS_ACCEL
+#define CHASSIS_QUEUE_LEN       8U
+#define CHASSIS_STOP_TIMEOUT_MS 20U
 
-/* 脉冲 / 米: PPR / (2πR) */
-#define PULSE_PER_M      ((float)PULSES_PER_REV / (2.0f * 3.14159265f * WHEEL_RADIUS))
-
-
-/* ====================================================================== */
-/*  移动指令队列                                                          */
-/* ====================================================================== */
-
-#define CHASSIS_QUEUE_LEN   8
+#define ROTATE_PID_KP           0.05f
+#define ROTATE_PID_KI           0.0f
+#define ROTATE_PID_KD           0.002f
+#define ROTATE_SPEED_LIMIT      2.0f
+#define ROTATE_ANGLE_DEAD       3.0f
+#define ROTATE_RPM_PER_RAD_S    30.0f
 
 static QueueHandle_t chassis_queue = NULL;
+static TimerHandle_t control_timer = NULL;
+
+TaskHandle_t ChassisTaskHandle = NULL;
+
+static volatile bool motion_active = false;
+static volatile bool motion_abort_requested = false;
+
+static PID_Param_float rotate_pid;
+static PID_Param_float heading_pid;
+
+static volatile uint32_t dbg_cmd_sent = 0;
+static volatile uint32_t dbg_cmd_recv = 0;
 
 /* ====================================================================== */
-/*  工具: 轮位移(m) → ZDT_SetPosition                                    */
+/*  Gyroscope continuous-yaw helper                                       */
 /* ====================================================================== */
 
-static void wheel_position(uint8_t id, float disp_m)
+typedef struct {
+    float angle;
+    uint32_t last_update_tick;
+    uint32_t zero_generation;
+    bool valid;
+} GyroSample_t;
+
+static bool gyro_get_sample(GyroSample_t *sample)
 {
-    int32_t pulses = (int32_t)(disp_m * PULSE_PER_M);
-    if (pulses == 0) return;
+    float pitch;
+    float roll;
+    float yaw;
+    static float cached = 0.0f;
+    static float prev_raw = 0.0f;
+    static float unwrap_offset = 0.0f;
+    static uint32_t last_zero_generation = 0;
+    static uint32_t last_update_tick = 0;
+    static bool valid = false;
 
-    uint8_t dir  = (pulses > 0) ? ZDT_DIR_CW : ZDT_DIR_CCW;
-    if (pulses < 0) pulses = -pulses;
+    if (sample == NULL) {
+        return false;
+    }
 
-    ZDT_SetPosition(id, dir, POS_SPEED_RPM, POS_ACCEL, pulses,
-                    ZDT_POS_RELATIVE, ZDT_SYNC_WAIT);
+    if (WitGyro_GetAngle(&pitch, &roll, &yaw))
+    {
+        uint32_t zero_generation = WitGyro_GetZeroGeneration();
+
+        if (!valid || zero_generation != last_zero_generation) {
+            prev_raw = yaw;
+            unwrap_offset = 0.0f;
+            cached = yaw;
+            last_zero_generation = zero_generation;
+        } else {
+            float delta = yaw - prev_raw;
+            if (delta > 180.0f) {
+                unwrap_offset -= 360.0f;
+            } else if (delta < -180.0f) {
+                unwrap_offset += 360.0f;
+            }
+            prev_raw = yaw;
+            cached = yaw + unwrap_offset;
+        }
+
+        last_update_tick = HAL_GetTick();
+        valid = true;
+    }
+
+    sample->angle = cached;
+    sample->last_update_tick = last_update_tick;
+    sample->zero_generation = last_zero_generation;
+    sample->valid = valid;
+    return valid;
 }
 
 /* ====================================================================== */
-/*  Chassis_OnCarMove                                                      */
-/*  上位机方向+距离 → 车体位移 → 逆运动学 → 四轮脉冲 → ZDT_SetPosition    */
+/*  Signed wheel-speed output                                             */
 /* ====================================================================== */
 
-void Chassis_OnCarMove(const CarMove_t *cmd)
+static int16_t clamp_motor_rpm(int32_t rpm)
 {
-    if (cmd == NULL) return;
+    if (rpm > CONFIG_CHASSIS_MOTOR_RPM_LIMIT) {
+        return CONFIG_CHASSIS_MOTOR_RPM_LIMIT;
+    }
+    if (rpm < -CONFIG_CHASSIS_MOTOR_RPM_LIMIT) {
+        return -CONFIG_CHASSIS_MOTOR_RPM_LIMIT;
+    }
+    return (int16_t)rpm;
+}
 
-    /* direction(度) → 弧度, distance(mm) → 米 */
-    float dir_rad = (float)cmd->direction * 3.14159265f / 180.0f;
-    float dist_m  = (float)cmd->distance / 1000.0f;
+static ZDT_VelocityCommand_t make_wheel_velocity(uint8_t id,
+                                                  int16_t signed_rpm)
+{
+    ZDT_VelocityCommand_t command;
 
-    /* 方向角 → 车体位移 (纯平移, 不旋转) */
-    float dx = cosf(dir_rad) * dist_m;
-    float dy = sinf(dir_rad) * dist_m;
-    float dt = 0.0f;
+    command.addr = id;
+    command.dir = (signed_rpm >= 0) ? ZDT_DIR_CW : ZDT_DIR_CCW;
+    command.speed_rpm = (uint16_t)((signed_rpm >= 0)
+                      ? signed_rpm : -(int32_t)signed_rpm);
+    command.accel = CONFIG_STEPPER_CHASSIS_ACCEL;
+    return command;
+}
 
-    /* 逆运动学: 车体位移 → 四轮线位移 */
-    ChassisSpeed_t ik_in  = {dx, dy, dt};
-    WheelSpeed_t   ik_out;
-    Kinematics_Inverse(&ik_in, &ik_out);
+static void drive_wheel_rpm(float rpm_1, float rpm_2,
+                            float rpm_3, float rpm_4)
+{
+    int16_t motor_1 = clamp_motor_rpm((int32_t)lroundf(rpm_1));
+    int16_t motor_2 = clamp_motor_rpm((int32_t)lroundf(rpm_2));
+    int16_t motor_3 = clamp_motor_rpm((int32_t)lroundf(rpm_3));
+    int16_t motor_4 = clamp_motor_rpm((int32_t)lroundf(rpm_4));
+    ZDT_VelocityCommand_t commands[4] = {
+        make_wheel_velocity(1U, motor_1),
+        make_wheel_velocity(2U, motor_2),
+        make_wheel_velocity(3U, motor_3),
+        make_wheel_velocity(4U, motor_4)
+    };
 
-    /* 四轮定位 (SYNC_WAIT 模式, 全部发完再同步触发) */
-    wheel_position(1, ik_out.v1);
-    wheel_position(2, ik_out.v2);
-    wheel_position(3, ik_out.v3);
-    wheel_position(4, ik_out.v4);
+    /* 周期控制不等待 UART：总线忙时保留上一周期轮速。 */
+    (void)ZDT_SetVelocitySyncBatch(commands, 4U, 0U);
+}
 
-    ZDT_SyncTrigger();
+static void drive_translation(float rpm_x, float rpm_y, float yaw_rpm)
+{
+    drive_wheel_rpm(rpm_y + yaw_rpm,
+                    rpm_x - yaw_rpm,
+                    rpm_y - yaw_rpm,
+                    rpm_x + yaw_rpm);
+}
+
+static void drive_rotation(float speed_rad_s)
+{
+    float yaw_rpm = speed_rad_s * ROTATE_RPM_PER_RAD_S;
+
+    drive_wheel_rpm(yaw_rpm, -yaw_rpm, -yaw_rpm, yaw_rpm);
+}
+
+static void stop_all_motors(void)
+{
+    static const uint8_t addresses[4] = {1U, 2U, 3U, 4U};
+    (void)ZDT_StopBatch(addresses, 4U, CHASSIS_STOP_TIMEOUT_MS);
 }
 
 /* ====================================================================== */
-/*  全局变量                                                              */
+/*  Timer and command helpers                                             */
 /* ====================================================================== */
 
-TaskHandle_t ChassisTaskHandle;
+static void ControlTimerCallback(TimerHandle_t xTimer)
+{
+    (void)xTimer;
+
+    if (ChassisTaskHandle != NULL) {
+        xTaskNotifyGive(ChassisTaskHandle);
+    }
+}
+
+static void drain_control_notifications(void)
+{
+    while (ulTaskNotifyTake(pdTRUE, 0) != 0U) {
+    }
+}
+
+static int16_t clamp_to_int16(float value)
+{
+    if (value > (float)INT16_MAX) {
+        return INT16_MAX;
+    }
+    if (value < (float)INT16_MIN) {
+        return INT16_MIN;
+    }
+    return (int16_t)lroundf(value);
+}
+
+static uint32_t calculate_translation(uint32_t *duration_ms,
+                                      float *rpm_x, float *rpm_y,
+                                      int16_t x_mm, int16_t y_mm)
+{
+    float x_time_s;
+    float y_time_s;
+    float duration_s;
+
+    if (duration_ms == NULL || rpm_x == NULL || rpm_y == NULL) {
+        return 0U;
+    }
+    if (x_mm == 0 && y_mm == 0) {
+        *duration_ms = 0U;
+        *rpm_x = 0.0f;
+        *rpm_y = 0.0f;
+        return 0U;
+    }
+
+    x_time_s = fabsf((float)x_mm) / CONFIG_CHASSIS_X_SPEED_MM_S;
+    y_time_s = fabsf((float)y_mm) / CONFIG_CHASSIS_Y_SPEED_MM_S;
+    duration_s = fmaxf(x_time_s, y_time_s);
+
+    if (duration_s < ((float)CONFIG_CHASSIS_MIN_MOVE_MS / 1000.0f)) {
+        duration_s = (float)CONFIG_CHASSIS_MIN_MOVE_MS / 1000.0f;
+    }
+
+    *duration_ms = (uint32_t)ceilf(duration_s * 1000.0f);
+    *rpm_x = CONFIG_CHASSIS_X_DIRECTION * CONFIG_CHASSIS_TRANSLATE_RPM
+           * ((float)x_mm / (CONFIG_CHASSIS_X_SPEED_MM_S * duration_s));
+    *rpm_y = CONFIG_CHASSIS_Y_DIRECTION * CONFIG_CHASSIS_TRANSLATE_RPM
+           * ((float)y_mm / (CONFIG_CHASSIS_Y_SPEED_MM_S * duration_s));
+    return *duration_ms;
+}
 
 /* ====================================================================== */
-/*  Chassis_SendMoveCmd — 下发移动指令 (非阻塞)                            */
+/*  Motion execution in ChassisTask context                               */
 /* ====================================================================== */
 
-static volatile uint32_t dbg_cmd_sent = 0;   /* 调试: Chassis_SendMoveCmd 累计入队 */
-static volatile uint32_t dbg_cmd_recv = 0;   /* 调试: Chassis_Task 累计收到 */
+static bool execute_translation(const ChassisMoveCmd_t *cmd)
+{
+    uint32_t duration_ms;
+    uint32_t start_tick;
+    uint32_t heading_zero_generation = 0;
+    float rpm_x;
+    float rpm_y;
+    bool heading_locked = false;
+    bool completed = false;
+
+    if (cmd == NULL) {
+        return false;
+    }
+    if (calculate_translation(&duration_ms, &rpm_x, &rpm_y,
+                              cmd->x, cmd->y) == 0U) {
+        return true;
+    }
+
+    PID_Set_Kparam_float(&heading_pid,
+                         CONFIG_CHASSIS_HEADING_KP,
+                         CONFIG_CHASSIS_HEADING_KI,
+                         CONFIG_CHASSIS_HEADING_KD);
+    PID_Set_ErrorDeadZone_float(&heading_pid,
+                                CONFIG_CHASSIS_HEADING_DEAD_DEG);
+    PID_Set_OutputLimit_float(&heading_pid,
+                              CONFIG_CHASSIS_YAW_RPM_LIMIT);
+    PID_ClearUp_float(&heading_pid);
+
+    drain_control_notifications();
+    motion_abort_requested = false;
+    motion_active = true;
+    start_tick = HAL_GetTick();
+    xTimerStart(control_timer, 0);
+
+    for (;;)
+    {
+        uint32_t now = HAL_GetTick();
+        float yaw_rpm = 0.0f;
+        GyroSample_t gyro;
+
+        if (motion_abort_requested) {
+            break;
+        }
+        if ((uint32_t)(now - start_tick) >= duration_ms) {
+            completed = true;
+            break;
+        }
+
+        if (gyro_get_sample(&gyro) &&
+            (uint32_t)(now - gyro.last_update_tick)
+                <= CONFIG_CHASSIS_GYRO_TIMEOUT_MS)
+        {
+            if (!heading_locked ||
+                gyro.zero_generation != heading_zero_generation)
+            {
+                PID_Set_Target_float(&heading_pid, gyro.angle);
+                PID_ClearUp_float(&heading_pid);
+                heading_pid.ValueLast = gyro.angle;
+                heading_zero_generation = gyro.zero_generation;
+                heading_locked = true;
+            }
+
+            yaw_rpm = PID_Update_float(&heading_pid, gyro.angle);
+            heading_pid.ValueLast = gyro.angle;
+        }
+        else
+        {
+            /* Gyro stale: finish this command with timed open-loop motion. */
+            heading_locked = false;
+            PID_ClearUp_float(&heading_pid);
+        }
+
+        drive_translation(rpm_x, rpm_y, yaw_rpm);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+
+    xTimerStop(control_timer, 0);
+    stop_all_motors();
+    osDelay(CONFIG_CHASSIS_STOP_SETTLE_MS);
+    PID_ClearUp_float(&heading_pid);
+    motion_active = false;
+    motion_abort_requested = false;
+    drain_control_notifications();
+    return completed;
+}
+
+static bool execute_rotation(const ChassisMoveCmd_t *cmd)
+{
+    bool completed = false;
+
+    if (cmd == NULL) {
+        return false;
+    }
+
+    PID_Set_Kparam_float(&rotate_pid,
+                         ROTATE_PID_KP, ROTATE_PID_KI, ROTATE_PID_KD);
+    PID_Set_Target_float(&rotate_pid, (float)cmd->rotation / 100.0f);
+    PID_Set_OutputLimit_float(&rotate_pid, ROTATE_SPEED_LIMIT);
+    PID_ClearUp_float(&rotate_pid);
+
+    drain_control_notifications();
+    motion_abort_requested = false;
+    motion_active = true;
+    xTimerStart(control_timer, 0);
+
+    for (;;)
+    {
+        GyroSample_t gyro;
+
+        if (motion_abort_requested) {
+            break;
+        }
+
+        if (gyro_get_sample(&gyro))
+        {
+            float speed = PID_Update_float(&rotate_pid, gyro.angle);
+            rotate_pid.ValueLast = gyro.angle;
+
+            if (fabsf(rotate_pid.ErrorNow) < ROTATE_ANGLE_DEAD) {
+                completed = true;
+                break;
+            }
+
+            drive_rotation(speed);
+        }
+
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+
+    xTimerStop(control_timer, 0);
+    stop_all_motors();
+    osDelay(CONFIG_CHASSIS_STOP_SETTLE_MS);
+    PID_ClearUp_float(&rotate_pid);
+    motion_active = false;
+    motion_abort_requested = false;
+    drain_control_notifications();
+    return completed;
+}
+
+/* ====================================================================== */
+/*  Public command API                                                    */
+/* ====================================================================== */
 
 int Chassis_SendMoveCmd(int16_t x, int16_t y, Event_t completion_event)
 {
-    if (chassis_queue == NULL) return -1;
-    ChassisMoveCmd_t cmd = { x, y, 0, completion_event };
+    ChassisMoveCmd_t cmd = {x, y, 0, completion_event};
+
+    if (chassis_queue == NULL) {
+        return -1;
+    }
     if (xQueueSend(chassis_queue, &cmd, 0) == pdPASS) {
         dbg_cmd_sent++;
         return 0;
@@ -107,10 +391,12 @@ int Chassis_SendMoveCmd(int16_t x, int16_t y, Event_t completion_event)
 
 int Chassis_SendRotateCmd(float degrees, Event_t completion_event)
 {
-    if (chassis_queue == NULL) return -1;
-    /* 旋转 PID 和 Z 轴陀螺仪反馈均使用角度制 */
     int16_t centidegree = (int16_t)(degrees * 100.0f);
-    ChassisMoveCmd_t cmd = { 0, 0, centidegree, completion_event };
+    ChassisMoveCmd_t cmd = {0, 0, centidegree, completion_event};
+
+    if (chassis_queue == NULL) {
+        return -1;
+    }
     if (xQueueSend(chassis_queue, &cmd, 0) == pdPASS) {
         dbg_cmd_sent++;
         return 0;
@@ -118,251 +404,95 @@ int Chassis_SendRotateCmd(float degrees, Event_t completion_event)
     return -1;
 }
 
-/* ====================================================================== */
-/*  Chassis_NotifyMoveComplete — 通知底盘当前移动已完成 (ISR 安全)         */
-/* ====================================================================== */
-
-void Chassis_NotifyMoveComplete(void)
+void Chassis_OnCarMove(const CarMove_t *cmd)
 {
-    if (ChassisTaskHandle == NULL) return;
+    float direction_rad;
+    float x_mm;
+    float y_mm;
 
-    BaseType_t taskWoken = pdFALSE;
-    vTaskNotifyGiveFromISR(ChassisTaskHandle, &taskWoken);
-    portYIELD_FROM_ISR(taskWoken);
-}
-
-/* ====================================================================== */
-/*  陀螺仪闭环旋转                                                        */
-/* ====================================================================== */
-
-/* --- 陀螺仪接口 (WitGyro WT901, Yaw 角度°) --- */
-static bool gyro_get_angle(float *angle)
-{
-    float pitch, roll, yaw;
-    static float cached = 0.0f;
-    static float prev_raw = 0.0f;
-    static float unwrap_offset = 0.0f;
-    static uint32_t last_zero_generation = 0;
-    static bool valid = false;
-
-    if (WitGyro_GetAngle(&pitch, &roll, &yaw))
-    {
-        uint32_t zero_generation = WitGyro_GetZeroGeneration();
-
-        if (zero_generation != last_zero_generation) {
-            /* 软件零点变化时同步清除旧的解绕状态 */
-            prev_raw = yaw;
-            unwrap_offset = 0.0f;
-            cached = yaw;
-            last_zero_generation = zero_generation;
-        } else {
-            /* 解绕 yaw: 检测跨越 ±180° 的跳变, 累积连续角度 */
-            float delta = yaw - prev_raw;
-            if (delta > 180.0f)       unwrap_offset -= 360.0f;
-            else if (delta < -180.0f) unwrap_offset += 360.0f;
-            prev_raw = yaw;
-            cached = yaw + unwrap_offset;
-        }
-        valid = true;
-    }
-
-    if (!valid) return false;
-    *angle = cached;
-    return true;
-}
-
-/* --- 旋转 PID (使用 PID.h 组件) --- */
-static PID_Param_float rotate_pid;
-static bool            rotate_active = false;
-
-#define ROTATE_PID_Kp       0.05f        /* 角度° → 速度, 已按°缩放 */
-#define ROTATE_PID_Ki       0.0f
-#define ROTATE_PID_Kd       0.002f       /* 微分阻尼 */
-#define ROTATE_SPEED_LIMIT  2.0f         /* 最大旋转速度 rad/s */
-#define ROTATE_ANGLE_DEAD   3.0f         /* °, 到位死区 */
-
-/* --- 驱动四轮旋转 (差分) --- */
-static void drive_rotation(float speed_rad_s)
-{
-    /* 旋转: 前+右 正转, 左+后 反转 (麦克纳姆轮旋转模式) */
-    /* speed_rad_s → ZDT 转速, 按经验比例换算 */
-    int16_t rpm = (int16_t)(speed_rad_s * 30.0f);
-    if (rpm > 150) rpm = 150;
-    if (rpm < -150) rpm = -150;
-
-    ZDT_SetVelocity(1, rpm > 0 ? ZDT_DIR_CW : ZDT_DIR_CCW,
-                    abs(rpm), CONFIG_STEPPER_CHASSIS_ACCEL, ZDT_SYNC_IMMEDIATE);
-    ZDT_SetVelocity(2, rpm > 0 ? ZDT_DIR_CCW : ZDT_DIR_CW,
-                    abs(rpm), CONFIG_STEPPER_CHASSIS_ACCEL, ZDT_SYNC_IMMEDIATE);
-    ZDT_SetVelocity(3, rpm > 0 ? ZDT_DIR_CCW : ZDT_DIR_CW,
-                    abs(rpm), CONFIG_STEPPER_CHASSIS_ACCEL, ZDT_SYNC_IMMEDIATE);
-    ZDT_SetVelocity(4, rpm > 0 ? ZDT_DIR_CW : ZDT_DIR_CCW,
-                    abs(rpm), CONFIG_STEPPER_CHASSIS_ACCEL, ZDT_SYNC_IMMEDIATE);
-    ZDT_SyncTrigger();
-}
-
-/* ====================================================================== */
-/*  软件定时器: 轮询 ZDT 到位 / 陀螺仪旋转到位                            */
-/* ====================================================================== */
-
-static TimerHandle_t  move_check_timer = NULL;
-static uint32_t      move_start_tick = 0;
-
-#define MOVE_TIMEOUT_MS  2000   /* 2s 超时 */
-
-static void MoveCheckTimerCallback(TimerHandle_t xTimer)
-{
-    (void)xTimer;
-
-    /* ---- 旋转模式 (陀螺仪闭环) ---- */
-    if (rotate_active)
-    {
-        float current;
-        if (!gyro_get_angle(&current)) {
-            return;             /* 首帧有效角度到达前不驱动电机 */
-        }
-        float speed = PID_Update_float(&rotate_pid, current);
-
-        /* 死区: 误差在死区内视为到位 */
-        if (fabsf(rotate_pid.ErrorNow) < ROTATE_ANGLE_DEAD)
-        {
-            ZDT_Stop(1); ZDT_Stop(2); ZDT_Stop(3); ZDT_Stop(4);
-            rotate_active = false;
-            PID_ClearUp_float(&rotate_pid);
-            xTimerStop(xTimer, 0);
-            xTaskNotifyGive(ChassisTaskHandle);
-            return;
-        }
-
-        if (speed >  ROTATE_SPEED_LIMIT) speed =  ROTATE_SPEED_LIMIT;
-        if (speed < -ROTATE_SPEED_LIMIT) speed = -ROTATE_SPEED_LIMIT;
-
-        drive_rotation(speed);
+    if (cmd == NULL) {
         return;
     }
 
-    /* ---- 平移模式 (ZDT 到位回传) ---- */
-    /* 超时检查 */
-    if (HAL_GetTick() - move_start_tick >= MOVE_TIMEOUT_MS)
-    {
-        xTimerStop(xTimer, 0);
-        xTaskNotifyGive(ChassisTaskHandle);
-        return;
-    }
-
-    for (uint8_t i = 1; i <= 4; i++)
-    {
-        ZDT_MotorStatus_t *st = ZDT_GetStatus(i);
-        if (st == NULL || !st->move_done)
-            return;                     /* 还有电机没到位 */
-    }
-
-    /* 四轮全部到位 → 清标志, 停止定时器, 通知任务 */
-    for (uint8_t i = 1; i <= 4; i++)
-    {
-        ZDT_MotorStatus_t *st = ZDT_GetStatus(i);
-        if (st) st->move_done = false;
-    }
-
-    xTimerStop(xTimer, 0);
-    xTaskNotifyGive(ChassisTaskHandle);
+    direction_rad = (float)cmd->direction * 3.14159265f / 180.0f;
+    x_mm = cosf(direction_rad) * (float)cmd->distance;
+    y_mm = sinf(direction_rad) * (float)cmd->distance;
+    (void)Chassis_SendMoveCmd(clamp_to_int16(x_mm),
+                              clamp_to_int16(y_mm), EVENT_NONE);
 }
-
-/* ====================================================================== */
-/*  Chassis_Task                                                          */
-/*  阻塞读取移动指令队列 → 执行 → 等待电机到位 → 取下一条                 */
-/* ====================================================================== */
 
 void Chassis_Task(void *argument)
 {
-    (void)argument;
+    ChassisMoveCmd_t cmd;
 
+    (void)argument;
     ChassisTaskHandle = xTaskGetCurrentTaskHandle();
 
-    /* 创建到位检测定时器 (10ms 周期) */
-    move_check_timer = xTimerCreate("move_chk", pdMS_TO_TICKS(10), pdTRUE,
-                                     NULL, MoveCheckTimerCallback);
-
-    ChassisMoveCmd_t cmd;
+    control_timer = xTimerCreate("chassis_ctl",
+                                 pdMS_TO_TICKS(CONFIG_CHASSIS_CONTROL_PERIOD_MS),
+                                 pdTRUE, NULL, ControlTimerCallback);
+    if (control_timer == NULL) {
+        vTaskDelete(NULL);
+        return;
+    }
 
     for (;;)
     {
-        /* 1) 阻塞等待移动指令 */
-        if (xQueueReceive(chassis_queue, &cmd, portMAX_DELAY) != pdPASS)
+        bool completed;
+
+        if (xQueueReceive(chassis_queue, &cmd, portMAX_DELAY) != pdPASS) {
             continue;
+        }
         dbg_cmd_recv++;
 
-        /* 判断指令类型 */
-        if (cmd.x == 0 && cmd.y == 0 && cmd.rotation != 0)
-        {
-            /* === 纯旋转: 陀螺仪闭环 (PID float) === */
-            PID_Set_Kparam_float(&rotate_pid, ROTATE_PID_Kp,
-                                  ROTATE_PID_Ki, ROTATE_PID_Kd);
-            PID_Set_Target_float(&rotate_pid, (float)cmd.rotation / 100.0f);
-            PID_Set_OutputLimit_float(&rotate_pid, ROTATE_SPEED_LIMIT);
-            PID_ClearUp_float(&rotate_pid);
-            rotate_active = true;
-
-            move_start_tick = HAL_GetTick();
-            xTimerStart(move_check_timer, 0);
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-            rotate_active = false;
-        }
-        else
-        {
-            /* === 平移 (含平移+旋转) === */
-            float dx = (float)cmd.x / 1000.0f;
-            float dy = (float)cmd.y / 1000.0f;
-            float dt = (float)cmd.rotation / 100.0f;
-
-            ChassisSpeed_t ik_in  = {dx, dy, dt};
-            WheelSpeed_t   ik_out;
-            Kinematics_Inverse(&ik_in, &ik_out);
-
-            wheel_position(1, ik_out.v1); osDelay(1);
-            wheel_position(2, ik_out.v2); osDelay(1);
-            wheel_position(3, ik_out.v3); osDelay(1);
-            wheel_position(4, ik_out.v4); osDelay(1);
-
-            ZDT_SyncTrigger();
-
-            move_start_tick = HAL_GetTick();
-            xTimerStart(move_check_timer, 0);
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (cmd.x == 0 && cmd.y == 0 && cmd.rotation != 0) {
+            completed = execute_rotation(&cmd);
+        } else {
+            completed = execute_translation(&cmd);
         }
 
-        /* 到位 → 通知状态机 (如果有事件) */
-        if (cmd.completion_event != EVENT_NONE) {
+        if (completed && cmd.completion_event != EVENT_NONE) {
             SM_SendEvent(cmd.completion_event);
         }
-        /* 取下一条指令 */
     }
 }
 
 void Chassis_TaskInit(void)
 {
-    /* 队列必须在调度器启动前创建 */
     chassis_queue = xQueueCreate(CHASSIS_QUEUE_LEN, sizeof(ChassisMoveCmd_t));
+    if (chassis_queue == NULL) {
+        return;
+    }
 
-    xTaskCreate(Chassis_Task, "chassitask", 256, NULL, osPriorityAboveNormal1, &ChassisTaskHandle);
+    xTaskCreate(Chassis_Task, "chassitask", 256, NULL,
+                osPriorityAboveNormal1, &ChassisTaskHandle);
 }
-
-/* ====================================================================== */
-/* ====================================================================== */
-/*  Chassis_Stop / Chassis_Enable                                         */
-/* ====================================================================== */
 
 void Chassis_Stop(void)
 {
-    ZDT_Stop(1); ZDT_Stop(2); ZDT_Stop(3); ZDT_Stop(4);
+    if (motion_active) {
+        motion_abort_requested = true;
+        if (ChassisTaskHandle != NULL) {
+            xTaskNotifyGive(ChassisTaskHandle);
+        }
+        return;
+    }
+
+    stop_all_motors();
 }
 
 void Chassis_Enable(bool en)
 {
     if (en) {
-        ZDT_Enable(1); ZDT_Enable(2); ZDT_Enable(3); ZDT_Enable(4);
+        ZDT_Enable(1);
+        ZDT_Enable(2);
+        ZDT_Enable(3);
+        ZDT_Enable(4);
     } else {
-        ZDT_Disable(1); ZDT_Disable(2); ZDT_Disable(3); ZDT_Disable(4);
+        Chassis_Stop();
+        ZDT_Disable(1);
+        ZDT_Disable(2);
+        ZDT_Disable(3);
+        ZDT_Disable(4);
     }
 }

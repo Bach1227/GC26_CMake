@@ -96,8 +96,8 @@ static void Action_Nop(void)
 
 static void Action_Start(void)
 {
-    SM_ChassisMove(50, 50, EVENT_NONE);      /* 中间点 */
-    SM_ChassisMove(300, 0, EVENT_ARRIVED);    /* 到 QR 位 */
+    SM_ChassisMove(200, 200, EVENT_NONE);      /* 中间点 */
+    SM_ChassisMove(500, 0, EVENT_ARRIVED);    /* 到 QR 位 */
 }
 
 static void Action_ParseQR(void)
@@ -165,6 +165,7 @@ static void Action_PlaceRough1(void)
     /* 从车身取料 → 放到粗加工区 */
     for (int i = 0; i < 3; i++)
     {
+
         /* 从车身对应角度取料 */
         float c_angle = car_angle(seq[i]);
         Gimbal_SetAngle(c_angle);

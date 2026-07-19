@@ -28,9 +28,6 @@ int  Chassis_SendMoveCmd(int16_t x, int16_t y, Event_t completion_event);
 /** 下发原地旋转指令 (非阻塞), 使用陀螺仪闭环 (角度制) */
 int  Chassis_SendRotateCmd(float degrees, Event_t completion_event);
 
-/** 通知底盘当前移动已完成 (可从 ISR 调用) */
-void Chassis_NotifyMoveComplete(void);
-
 /* ---- ---- */
 
 void Chassis_OnCarMove(const CarMove_t *cmd);
