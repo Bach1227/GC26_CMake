@@ -121,6 +121,21 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
   /* 在创建任何业务任务前启动总线并依次使能全部 ZDT 电机。 */
   ZDT_PreTaskInit();
+
+#if CONFIG_USE_GIMBAL
+  /*
+   * 必须在创建任何 FreeRTOS 任务之前执行：
+   * 调度器启动前创建任务会屏蔽低优先级中断，此后 HAL_Delay 无法依靠
+   * TIM8（优先级 15）推进时基。
+   */
+  Gimbal_GripperInit();
+#if CONFIG_GRIPPER_STARTUP_TEST
+Gimbal_Gripper(500);
+HAL_Delay(CONFIG_GRIPPER_STARTUP_TEST_HOLD_MS);
+Gimbal_Gripper(2500);
+HAL_Delay(CONFIG_GRIPPER_STARTUP_TEST_HOLD_MS);
+#endif
+#endif
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */

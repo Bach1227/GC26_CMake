@@ -3,7 +3,6 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "protocol.h"
 #include "bsp_zdt.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -29,8 +28,6 @@ int  Chassis_SendMoveCmd(int16_t x, int16_t y, Event_t completion_event);
 int  Chassis_SendRotateCmd(float degrees, Event_t completion_event);
 
 /* ---- ---- */
-
-void Chassis_OnCarMove(const CarMove_t *cmd);
 
 void Chassis_Task(void *argument);
 

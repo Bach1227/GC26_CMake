@@ -15,10 +15,7 @@
 #include "tim.h"
 
 /* 共享变量 (statemachine.c 中定义) */
-extern volatile bool g_color_pending;
-extern volatile ColorConfirm_t g_color_result;
-extern uint8_t seq[3];
-extern const uint8_t expected_color[4];
+extern uint8_t seq[2][3];
 
 /* ====================================================================== */
 /*  配置                                                                  */
@@ -26,11 +23,11 @@ extern const uint8_t expected_color[4];
 
 #define MOTOR_TX_ID         0x001u     /* 发送命令 ID */
 #define MOTOR_RX_ID         0x000u     /* 接收反馈 ID */
-#define ANGLE_TARGET_DEFAULT 0.0f       /* 默认目标 180° */
+#define ANGLE_TARGET_DEFAULT CONFIG_CAR_MATERIAL_POS_1_DEG      /* 默认目标 180° */
 
 /* PID (角度° → 速度) */
-#define PID_Kp              0.03f
-#define PID_Ki              0.002f
+#define PID_Kp              0.025f
+#define PID_Ki              0.001f
 #define PID_Kd              0.0f
 #define SPEED_LIMIT         6.0f          /* 输出上限 */
 #define INTEGRAL_RANGE      30.0f         /* ° */
@@ -217,6 +214,7 @@ void Gimbal_Task(void *argument)
         }
 #endif
         DM_J4310_MIT_Send(&hfdcan2, MOTOR_TX_ID, &mit);
+        // DM_J4310_MIT_Send(&hfdcan2, MOTOR_TX_ID, &mit);
 
         osDelay(CTRL_PERIOD_MS);
     }
@@ -226,31 +224,30 @@ void Gimbal_Task(void *argument)
 /*  ZDT 直线动作                                                         */
 /* ====================================================================== */
 
-static void zdt_move(uint8_t id, int32_t pulses)
+static void zdt_move(uint8_t id, int32_t pulses,
+                     uint16_t speed_rpm, uint8_t accel)
 {
     if (pulses == 0) return;
 
     uint8_t dir = (pulses > 0) ? ZDT_DIR_CW : ZDT_DIR_CCW;
-    uint16_t rpm = (id == ZDT_ID_LIFT)
-                 ? CONFIG_STEPPER_LIFT_SPEED_RPM
-                 : CONFIG_STEPPER_EXTEND_SPEED_RPM;
-    uint8_t accel = (id == ZDT_ID_LIFT)
-                  ? CONFIG_STEPPER_LIFT_ACCEL
-                  : CONFIG_STEPPER_EXTEND_ACCEL;
     if (pulses < 0) pulses = -pulses;
 
-    ZDT_SetPosition(id, dir, rpm, accel, pulses,
+    ZDT_SetPosition(id, dir, speed_rpm, accel, pulses,
                     ZDT_POS_RELATIVE, ZDT_SYNC_IMMEDIATE);
 }
 
 void Gimbal_Extend(int32_t pulses)
 {
-    zdt_move(ZDT_ID_EXTEND, pulses);
+    zdt_move(ZDT_ID_EXTEND, pulses,
+             CONFIG_STEPPER_EXTEND_SPEED_RPM,
+             CONFIG_STEPPER_EXTEND_ACCEL);
 }
 
 void Gimbal_Lift(int32_t pulses)
 {
-    zdt_move(ZDT_ID_LIFT, pulses);
+    zdt_move(ZDT_ID_LIFT, pulses,
+             CONFIG_STEPPER_LIFT_SPEED_RPM,
+             CONFIG_STEPPER_LIFT_ACCEL);
 }
 
 /* ====================================================================== */
@@ -260,7 +257,8 @@ void Gimbal_Lift(int32_t pulses)
 void Gimbal_GripperInit(void)
 {
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0);  /* 初始闭合 */
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3,
+                          CONFIG_GRIPPER_CLOSE_PULSE_US);  /* 初始闭合 */
 }
 
 void Gimbal_Gripper(uint32_t pulse)
@@ -272,7 +270,7 @@ void Gimbal_Gripper(uint32_t pulse)
 /*  复合命令 — 取料序列 (内部直接调 Gimbal_* API)                        */
 /* ====================================================================== */
 
-#define FETCH_PICKUP_EXTEND  500
+#define FETCH_PICKUP_EXTEND  1500
 #define FETCH_PLACE_EXTEND   300
 #define FETCH_EXTEND_DIFF    (FETCH_PICKUP_EXTEND - FETCH_PLACE_EXTEND)
 
@@ -280,22 +278,10 @@ static float fetch_car_angle(uint8_t pos)
 {
     float deg;
     if (pos == 1)      deg = CONFIG_CAR_MATERIAL_POS_1_DEG;
-    else if (pos == 2) deg = CONFIG_CAR_MATERIAL_POS_2_DEG;
-    else               deg = CONFIG_CAR_MATERIAL_POS_3_DEG;
+    else if (pos == 2) deg = CONFIG_CAR_MATERIAL_POS_1_DEG-30;
+    else               deg = CONFIG_CAR_MATERIAL_POS_1_DEG-30-35;
     if (deg > 180.0f) deg -= 360.0f;
     return deg;
-}
-
-static bool wait_expected_color(uint8_t pos)
-{
-#if CONFIG_SKIP_COLOR_CONFIRM
-    (void)pos;
-    return true;
-#else
-    g_color_pending = true;
-    while (g_color_pending) osDelay(10);
-    return g_color_result.color == expected_color[pos];
-#endif
 }
 
 static void ExecFetchRaw(Event_t done_event)
@@ -305,39 +291,40 @@ static void ExecFetchRaw(Event_t done_event)
     //                 CONFIG_STEPPER_LIFT_ACCEL,
     //                 ZDT_SYNC_IMMEDIATE);
 
-    Gimbal_Extend(FETCH_PICKUP_EXTEND);
-    osDelay(100);
+    // Gimbal_Extend(5000);
+    // osDelay(100);
 
     for (int i = 0; i < 3; i++)
     {
-        if (wait_expected_color(seq[i]))
-        {
-            Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES); osDelay(2000);
-            Gimbal_Gripper(30000); osDelay(200);
-            Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES); osDelay(2000);
-        }
+        // if (wait_expected_color(seq[0][i]))
+        // {
+        //     Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES); osDelay(2000);
+            Gimbal_Gripper(CONFIG_GRIPPER_CLOSE_PULSE_US); osDelay(200);
+        //     Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES); osDelay(2000);
+        // }
 
-        Gimbal_Extend(-FETCH_EXTEND_DIFF); osDelay(100);
-        float angle = fetch_car_angle(seq[i]);
+        float angle = fetch_car_angle(seq[0][i]);
         Gimbal_SetAngle(angle);
         while (fabsf(Gimbal_GetAngle() - angle) > 1.0f) osDelay(10);
 
-        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES); osDelay(2000);
-        Gimbal_Gripper(0); osDelay(200);
-        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES); osDelay(2000);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES); osDelay(1500);
+        Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US); osDelay(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES); osDelay(1500);
 
-        Gimbal_Extend(FETCH_EXTEND_DIFF); osDelay(100);
-        float folded_angle = CONFIG_MAP_MATERIAL_POS_2_DEG;
-        Gimbal_SetAngle(folded_angle);
-        while (fabsf(Gimbal_GetAngle() - folded_angle) > 1.0f) osDelay(10);
+        Gimbal_Extend(2000); osDelay(2000);
+        Gimbal_Extend(-2000); osDelay(2000);
+        // float folded_angle = CONFIG_MAP_MATERIAL_POS_2_DEG;
+        // Gimbal_SetAngle(folded_angle);
+        // while (fabsf(Gimbal_GetAngle() - folded_angle) > 1.0f) osDelay(10);
+        // osDelay(1000);
     }
 
-    Gimbal_Extend(-FETCH_PICKUP_EXTEND);
+    // Gimbal_Extend(-FETCH_PICKUP_EXTEND);
     osDelay(100);
 
 
 
-    SM_SendEvent(done_event);
+    SM_SendEvent(EVENT_NONE);
 }
 
 /* ====================================================================== */

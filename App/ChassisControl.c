@@ -6,7 +6,6 @@
 #include "PID.h"
 #include "queue.h"
 #include "timers.h"
-#include <limits.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -128,10 +127,14 @@ static ZDT_VelocityCommand_t make_wheel_velocity(uint8_t id,
 static void drive_wheel_rpm(float rpm_1, float rpm_2,
                             float rpm_3, float rpm_4)
 {
-    int16_t motor_1 = clamp_motor_rpm((int32_t)lroundf(rpm_1));
-    int16_t motor_2 = clamp_motor_rpm((int32_t)lroundf(rpm_2));
-    int16_t motor_3 = clamp_motor_rpm((int32_t)lroundf(rpm_3));
-    int16_t motor_4 = clamp_motor_rpm((int32_t)lroundf(rpm_4));
+    int16_t motor_1 = clamp_motor_rpm((int32_t)lroundf(
+                         rpm_1 * CONFIG_CHASSIS_MOTOR_1_POLARITY));
+    int16_t motor_2 = clamp_motor_rpm((int32_t)lroundf(
+                         rpm_2 * CONFIG_CHASSIS_MOTOR_2_POLARITY));
+    int16_t motor_3 = clamp_motor_rpm((int32_t)lroundf(
+                         rpm_3 * CONFIG_CHASSIS_MOTOR_3_POLARITY));
+    int16_t motor_4 = clamp_motor_rpm((int32_t)lroundf(
+                         rpm_4 * CONFIG_CHASSIS_MOTOR_4_POLARITY));
     ZDT_VelocityCommand_t commands[4] = {
         make_wheel_velocity(1U, motor_1),
         make_wheel_velocity(2U, motor_2),
@@ -145,6 +148,8 @@ static void drive_wheel_rpm(float rpm_1, float rpm_2,
 
 static void drive_translation(float rpm_x, float rpm_y, float yaw_rpm)
 {
+    yaw_rpm *= CONFIG_CHASSIS_YAW_OUTPUT_DIRECTION;
+
     drive_wheel_rpm(rpm_y + yaw_rpm,
                     rpm_x - yaw_rpm,
                     rpm_y - yaw_rpm,
@@ -153,7 +158,8 @@ static void drive_translation(float rpm_x, float rpm_y, float yaw_rpm)
 
 static void drive_rotation(float speed_rad_s)
 {
-    float yaw_rpm = speed_rad_s * ROTATE_RPM_PER_RAD_S;
+    float yaw_rpm = speed_rad_s * ROTATE_RPM_PER_RAD_S
+                  * CONFIG_CHASSIS_YAW_OUTPUT_DIRECTION;
 
     drive_wheel_rpm(yaw_rpm, -yaw_rpm, -yaw_rpm, yaw_rpm);
 }
@@ -181,17 +187,6 @@ static void drain_control_notifications(void)
 {
     while (ulTaskNotifyTake(pdTRUE, 0) != 0U) {
     }
-}
-
-static int16_t clamp_to_int16(float value)
-{
-    if (value > (float)INT16_MAX) {
-        return INT16_MAX;
-    }
-    if (value < (float)INT16_MIN) {
-        return INT16_MIN;
-    }
-    return (int16_t)lroundf(value);
 }
 
 static uint32_t calculate_translation(uint32_t *duration_ms,
@@ -404,23 +399,6 @@ int Chassis_SendRotateCmd(float degrees, Event_t completion_event)
     return -1;
 }
 
-void Chassis_OnCarMove(const CarMove_t *cmd)
-{
-    float direction_rad;
-    float x_mm;
-    float y_mm;
-
-    if (cmd == NULL) {
-        return;
-    }
-
-    direction_rad = (float)cmd->direction * 3.14159265f / 180.0f;
-    x_mm = cosf(direction_rad) * (float)cmd->distance;
-    y_mm = sinf(direction_rad) * (float)cmd->distance;
-    (void)Chassis_SendMoveCmd(clamp_to_int16(x_mm),
-                              clamp_to_int16(y_mm), EVENT_NONE);
-}
-
 void Chassis_Task(void *argument)
 {
     ChassisMoveCmd_t cmd;
@@ -435,6 +413,10 @@ void Chassis_Task(void *argument)
         vTaskDelete(NULL);
         return;
     }
+
+    /* 调试安全：任务开始处理状态机命令前，先停止全部底盘电机。 */
+    stop_all_motors();
+    osDelay(CONFIG_CHASSIS_STOP_SETTLE_MS);
 
     for (;;)
     {

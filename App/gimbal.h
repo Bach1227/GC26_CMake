@@ -74,7 +74,7 @@ void Gimbal_Lift(int32_t pulses);
 /** 初始化夹爪 PWM (启动 TIM1 通道 3 输出) */
 void Gimbal_GripperInit(void);
 
-/** 夹爪 PWM (pulse = CCR 值, 0=闭合, 最大脉宽=张开) */
+/** 夹爪 PWM（TIM1 为 1 us/计数，pulse 等于高电平脉宽 us） */
 void Gimbal_Gripper(uint32_t pulse);
 
 #ifdef __cplusplus

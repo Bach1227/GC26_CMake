@@ -93,6 +93,16 @@ void SM_Init(void);
 /** 获取当前状态 */
 State_t SM_GetState(void);
 
+/**
+ * 一次保存两轮各三个物料的颜色顺序。
+ * 仅在 IDLE / MOVE_TO_QR / READ_QR 接受，成功返回 true。
+ */
+bool SM_SetMaterialSequences(const uint8_t first[3],
+                             const uint8_t second[3]);
+
+/** 保存上位机最近识别到的颜色（1=红，2=绿，3=蓝）。 */
+void SM_SetCurrentColor(uint8_t color);
+
 /** 处理事件: 查表执行动作并转换状态 */
 void SM_ProcessEvent(Event_t event);
 

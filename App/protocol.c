@@ -1,220 +1,139 @@
-/**
-  ******************************************************************************
-  * @file           : protocol.c
-  * @brief          : 工创通讯协议解析器实现
-  ******************************************************************************
-  */
-
 #include "protocol.h"
+
 #include "ChassisControl.h"
+#include "config.h"
 #include "statemachine.h"
-#include <string.h>
 
-/* 共享变量 (statemachine.c 中定义) */
-extern volatile bool g_color_pending;
-extern volatile ColorConfirm_t g_color_result;
+#include <stdbool.h>
+#include <stddef.h>
 
-/* ====================================================================== */
-/*  通用帧构建                                                            */
-/* ====================================================================== */
+typedef enum {
+    PARSER_WAIT_HEADER_0 = 0,
+    PARSER_WAIT_HEADER_1,
+    PARSER_READ_COMMAND,
+    PARSER_READ_LENGTH,
+    PARSER_READ_PAYLOAD,
+    PARSER_READ_CHECKSUM,
+} ParserState_t;
 
-/**
- * 构建一帧完整数据
- * @return 帧长度, 0 表示缓冲区不足
- */
-static uint16_t Protocol_BuildFrame(uint8_t seq, uint8_t type, uint8_t cmd,
-                                    const uint8_t *payload, uint16_t len,
-                                    uint8_t *out, uint16_t out_size)
+typedef struct {
+    ParserState_t state;
+    uint8_t command;
+    uint8_t length;
+    uint8_t payload_index;
+    uint8_t checksum;
+    uint8_t payload[PROTOCOL_MAX_PAYLOAD_LEN];
+} ProtocolParser_t;
+
+static ProtocolParser_t parser;
+static ProtocolTransmitCallback_t transmit_callback;
+
+volatile ProtocolVisionFeedback_t g_vision_feedback = {
+    .color = 0u,
+    .offset_x = 0,
+    .offset_y = 0,
+    .is_static = 0u,
+};
+
+static bool is_adjust_state(State_t state)
 {
-    uint16_t frame_len = PROTOCOL_MIN_FRAME_LEN + len; /* Header(2) + ... + 校验和(1) + payload */
+    return state == STATE_ADJUST_RAW_1 ||
+           state == STATE_ADJUST_ROUGH_1 ||
+           state == STATE_ADJUST_TEMP_1 ||
+           state == STATE_ADJUST_RAW_2 ||
+           state == STATE_ADJUST_ROUGH_2 ||
+           state == STATE_ADJUST_TEMP_2;
+}
 
-    if (out_size < frame_len || out == NULL)
-    {
-        return 0;
+static bool valid_material_sequence(const uint8_t order[3])
+{
+    uint8_t seen = 0u;
+
+    for (uint8_t i = 0u; i < 3u; ++i) {
+        if (order[i] < 1u || order[i] > 3u) {
+            return false;
+        }
+        seen |= (uint8_t)(1u << order[i]);
     }
 
-    uint16_t idx = 0;
-    out[idx++] = PROTOCOL_FRAME_HEADER_0;   /* 0xAA */
-    out[idx++] = PROTOCOL_FRAME_HEADER_1;   /* 0x55 */
-    out[idx++] = seq;
-    out[idx++] = type;
-    out[idx++] = cmd;
-    out[idx++] = (uint8_t)(len & 0xFFu);              /* LEN */
+    return seen == 0x0Eu;
+}
 
-    if (payload != NULL && len > 0)
-    {
-        memcpy(out + idx, payload, len);
-        idx += len;
+static void echo_frame(uint8_t command, const uint8_t *payload, uint8_t length)
+{
+    if (transmit_callback == NULL) {
+        return;
     }
 
-    /* 校验和: SUM(out[2..idx-1]), 截断为 8-bit */
-    uint8_t checksum = 0;
-    for (uint16_t i = 2; i < idx; i++) checksum += out[i];
-    out[idx++] = checksum;
-
-    return idx;
-}
-
-/* ====================================================================== */
-/*  组帧 API                                                              */
-/* ====================================================================== */
-
-uint16_t Protocol_BuildCmd(uint8_t seq, uint8_t cmd,
-                           const uint8_t *payload, uint16_t len,
-                           uint8_t *out, uint16_t out_size)
-{
-    return Protocol_BuildFrame(seq, MSG_TYPE_CMD, cmd, payload, len, out, out_size);
-}
-
-uint16_t Protocol_BuildAck(uint8_t seq, uint8_t ack_code,
-                           const uint8_t *payload, uint16_t len,
-                           uint8_t *out, uint16_t out_size)
-{
-    return Protocol_BuildFrame(seq, MSG_TYPE_ACK, ack_code, payload, len, out, out_size);
-}
-
-uint16_t Protocol_BuildStatus(uint8_t seq,
-                              const uint8_t *payload, uint16_t len,
-                              uint8_t *out, uint16_t out_size)
-{
-    return Protocol_BuildFrame(seq, MSG_TYPE_STATUS, 0x00, payload, len, out, out_size);
-}
-
-uint16_t Protocol_BuildEvent(uint8_t seq,
-                             const uint8_t *payload, uint16_t len,
-                             uint8_t *out, uint16_t out_size)
-{
-    return Protocol_BuildFrame(seq, MSG_TYPE_EVENT, 0x00, payload, len, out, out_size);
-}
-
-uint16_t Protocol_BuildHeartbeat(uint8_t seq,
-                                 uint8_t *out, uint16_t out_size)
-{
-    return Protocol_BuildFrame(seq, MSG_TYPE_HEARTBEAT, 0x00, NULL, 0, out, out_size);
-}
-
-uint16_t Protocol_BuildError(uint8_t seq, uint8_t error_code,
-                             uint8_t *out, uint16_t out_size)
-{
-    return Protocol_BuildFrame(seq, MSG_TYPE_ERROR, error_code, NULL, 0, out, out_size);
-}
-
-/* 段内推进一个字节 */
-#define ADVANCE() do { \
-    p++; rem--; consumed++; \
-    if (rem == 0 && seg_idx == 0 && seg[1].len > 0) { \
-        p = seg[1].ptr; rem = seg[1].len; seg_idx = 1; \
-    } \
-} while(0)
-
-/* ====================================================================== */
-/*  命令分发 (直接调用, 不走回调)                                           */
-/* ====================================================================== */
-
-static void Protocol_Dispatch(const ProtocolFrame_t *frame);  /* 前置声明 */
-
-/* ====================================================================== */
-/*  自动拆包 (根据 TYPE/CMD 判断)                                         */
-/* ====================================================================== */
-
-uint8_t Protocol_UnpackPayload(ProtocolFrame_t *frame)
-{
-    if (frame == NULL) return 0u;
-
-    const uint8_t *data = frame->payload_ptr ? frame->payload_ptr : frame->payload.raw;
-    uint16_t len = frame->len;
-    uint8_t result = 0u;
-
-    switch (frame->type)
-    {
-    case MSG_TYPE_CMD:
-        switch (frame->cmd)
-        {
-        case CMD_CAR_MOVE:
-            result = UnpackCarMove(data, len, &frame->payload.car_move); break;
-        case CMD_GRASP:
-            result = UnpackGrasp(data, len, &frame->payload.grasp); break;
-        case CMD_EMERGENCY:
-            result = UnpackEmergency(data, len, &frame->payload.emergency); break;
-        case CMD_MOVE_ADJUST:
-            result = UnpackMoveAdjust(data, len, &frame->payload.move_adjust); break;
-        case CMD_COLOR_CONFIRM:
-            result = UnpackColorConfirm(data, len, &frame->payload.color_confirm); break;
-        default: break;
-        }
-        break;
-
-    case MSG_TYPE_ACK:
-        switch (frame->cmd)
-        {
-        case ACK_ACK_ACK:
-            result = UnpackAckAck(data, len, &frame->payload.ack_ack); break;
-        case ACK_ACK_EVENT:
-            result = UnpackAckEvent(data, len, &frame->payload.ack_event); break;
-        default: break;
-        }
-        break;
-
-    case MSG_TYPE_STATUS:
-    case MSG_TYPE_EVENT:
-        if (len >= 4)
-            result = UnpackPosition(data, len, &frame->payload.position);
-        break;
-
-    case MSG_TYPE_HEARTBEAT:
-        result = 1u;
-        break;
-
-    case MSG_TYPE_ERROR:
-        result = 1u;
-        break;
-
-    default: break;
+    uint8_t frame[PROTOCOL_MAX_FRAME_LEN];
+    uint8_t checksum = (uint8_t)(command + length);
+    frame[0] = PROTOCOL_HEADER_0;
+    frame[1] = PROTOCOL_HEADER_1;
+    frame[2] = command;
+    frame[3] = length;
+    for (uint8_t i = 0u; i < length; ++i) {
+        frame[4u + i] = payload[i];
+        checksum = (uint8_t)(checksum + payload[i]);
     }
-
-    if (result)
-        Protocol_Dispatch(frame);
-
-    return result;
+    frame[4u + length] = checksum;
+    transmit_callback(frame, (uint16_t)(5u + length));
 }
 
-/* ====================================================================== */
-/*  命令分发 实现                                                          */
-/* ====================================================================== */
-
-static void Protocol_Dispatch(const ProtocolFrame_t *frame)
+static void dispatch_frame(uint8_t command, const uint8_t *payload,
+                           uint8_t length)
 {
-    switch (frame->type) {
+    switch (command) {
+    case PROTOCOL_CMD_MATERIAL_SEQUENCE:
+        if (length == sizeof(ProtocolMaterialSequences_t) &&
+            valid_material_sequence(payload) &&
+            valid_material_sequence(payload + 3u)) {
+            /*
+             * Firmware integration contract: statemachine.h must expose
+             * SM_SetMaterialSequences(first, second) and save both rounds.
+             */
+            (void)SM_SetMaterialSequences(payload, payload + 3u);
+            /*
+             * Always echo repeated valid frames. The host retries until one
+             * echo reaches it, even if the first echo was lost.
+             */
+            echo_frame(command, payload, length);
+        }
+        break;
 
-    case MSG_TYPE_CMD:
-        switch (frame->cmd) {
-        case CMD_CAR_MOVE: {
-            CarMove_t cmd;
-            if (UnpackCarMove(frame->payload_ptr, frame->len, &cmd)) {
-                Chassis_OnCarMove(&cmd);
+    case PROTOCOL_CMD_VISION_FEEDBACK:
+        if (length == sizeof(ProtocolVisionFeedback_t) &&
+            payload[0] <= 3u &&
+            payload[3] <= 1u) {
+            ProtocolVisionFeedback_t feedback = {
+                .color = payload[0],
+                .offset_x = (int8_t)payload[1],
+                .offset_y = (int8_t)payload[2],
+                .is_static = payload[3],
+            };
+
+            g_vision_feedback.color = feedback.color;
+            g_vision_feedback.offset_x = feedback.offset_x;
+            g_vision_feedback.offset_y = feedback.offset_y;
+            g_vision_feedback.is_static = feedback.is_static;
+            SM_SetCurrentColor(feedback.color);
+
+            if (!is_adjust_state(SM_GetState())) {
+                break;
             }
-            break;
-        }
-        case CMD_MOVE_ADJUST: {
-            MoveAdjust_t cmd;
-            if (UnpackMoveAdjust(frame->payload_ptr, frame->len, &cmd)) {
-                Chassis_SendMoveCmd(cmd.x, cmd.y, EVENT_NONE);
+
+            if (feedback.is_static != 0u) {
+                (void)SM_SendEvent(EVENT_ADJUST_DONE);
+                break;
             }
-            break;
-        }
-        case CMD_COLOR_CONFIRM: {
-            ColorConfirm_t confirm;
-            if (UnpackColorConfirm(frame->payload_ptr, frame->len, &confirm)) {
-                g_color_result = confirm;
-                g_color_pending = false;
-            }
-            break;
-        }
-        case CMD_ADJUST_DONE:
-            SM_SendEventFromISR(EVENT_ADJUST_DONE);
-            break;
-        default:
-            break;
+
+#if CONFIG_USE_CHASSIS
+            (void)Chassis_SendMoveCmd((int16_t)feedback.offset_x,
+                                      (int16_t)feedback.offset_y,
+                                      EVENT_NONE);
+#else
+            (void)feedback.offset_x;
+            (void)feedback.offset_y;
+#endif
         }
         break;
 
@@ -223,252 +142,90 @@ static void Protocol_Dispatch(const ProtocolFrame_t *frame)
     }
 }
 
-uint16_t Protocol_ParseBuffer(const segment_t seg[2])
+void Protocol_Reset(void)
 {
-    uint16_t consumed = 0;
-    uint16_t total = seg[0].len + seg[1].len;
+    parser.state = PARSER_WAIT_HEADER_0;
+    parser.command = 0u;
+    parser.length = 0u;
+    parser.payload_index = 0u;
+    parser.checksum = 0u;
+}
 
-    if (total < PROTOCOL_MIN_FRAME_LEN) return 0;
+void Protocol_SetTransmitCallback(ProtocolTransmitCallback_t callback)
+{
+    transmit_callback = callback;
+}
 
-    const uint8_t *p = seg[0].ptr;
-    uint16_t rem = seg[0].len;
-    uint8_t  seg_idx = 0;
-
-    while (consumed + PROTOCOL_MIN_FRAME_LEN <= total) {
-
-        /* ---- 1. 找 0xAA ---- */
-        if (*p != PROTOCOL_FRAME_HEADER_0) {
-            ADVANCE();
-            continue;
+static void process_byte(uint8_t byte)
+{
+    switch (parser.state) {
+    case PARSER_WAIT_HEADER_0:
+        if (byte == PROTOCOL_HEADER_0) {
+            parser.state = PARSER_WAIT_HEADER_1;
         }
+        break;
 
-        uint16_t frame_start = consumed;
-
-        /* AA 已确认, 推进 */
-        ADVANCE();
-
-        /* ---- 2. 0x55 ---- */
-        if (total - consumed < 1) { consumed = frame_start; break; }
-        if (*p != PROTOCOL_FRAME_HEADER_1) continue;
-        ADVANCE();
-
-        /* ---- 3. SEQ TYPE CMD LEN ---- */
-        if (total - consumed < 4) { consumed = frame_start; break; }
-
-        uint8_t seq = *p; ADVANCE();
-        uint8_t type = *p; ADVANCE();
-        uint8_t cmd  = *p; ADVANCE();
-        uint8_t len  = *p; ADVANCE();
-
-        if (len > PROTOCOL_MAX_PAYLOAD) continue;
-
-        /* ---- 4. 检查帧是否完整 ---- */
-        uint16_t frame_len = PROTOCOL_MIN_FRAME_LEN + len;
-        if (total - frame_start < frame_len) {
-            consumed = frame_start;
-            break;
+    case PARSER_WAIT_HEADER_1:
+        if (byte == PROTOCOL_HEADER_1) {
+            parser.state = PARSER_READ_COMMAND;
+        } else if (byte != PROTOCOL_HEADER_0) {
+            parser.state = PARSER_WAIT_HEADER_0;
         }
+        break;
 
-        /* ---- 5. 校验和 ---- */
-        uint8_t checksum = (uint8_t)(seq + type + cmd + len);
+    case PARSER_READ_COMMAND:
+        parser.command = byte;
+        parser.checksum = byte;
+        parser.state = PARSER_READ_LENGTH;
+        break;
 
-        const uint8_t *payload_ptr = p;
-        for (uint16_t i = 0; i < len; i++) {
-            checksum += *p;
-            ADVANCE();
+    case PARSER_READ_LENGTH:
+        parser.length = byte;
+        parser.checksum = (uint8_t)(parser.checksum + byte);
+        parser.payload_index = 0u;
+
+        if (parser.length > PROTOCOL_MAX_PAYLOAD_LEN) {
+            Protocol_Reset();
+        } else if (parser.length == 0u) {
+            parser.state = PARSER_READ_CHECKSUM;
+        } else {
+            parser.state = PARSER_READ_PAYLOAD;
         }
+        break;
 
-        uint8_t checksum_received = *p; ADVANCE();
-
-        /* ---- 6. 校验通过 → 回调 ---- */
-        if (checksum == checksum_received) {
-            ProtocolFrame_t frame;
-            frame.seq         = seq;
-            frame.type        = type;
-            frame.cmd         = cmd;
-            frame.len         = len;
-            frame.checksum    = checksum;
-            frame.payload_ptr = payload_ptr;
-            Protocol_Dispatch(&frame);
+    case PARSER_READ_PAYLOAD:
+        parser.payload[parser.payload_index++] = byte;
+        parser.checksum = (uint8_t)(parser.checksum + byte);
+        if (parser.payload_index >= parser.length) {
+            parser.state = PARSER_READ_CHECKSUM;
         }
+        break;
+
+    case PARSER_READ_CHECKSUM:
+        if (byte == parser.checksum) {
+            dispatch_frame(parser.command, parser.payload, parser.length);
+            Protocol_Reset();
+        } else {
+            Protocol_Reset();
+            if (byte == PROTOCOL_HEADER_0) {
+                parser.state = PARSER_WAIT_HEADER_1;
+            }
+        }
+        break;
+
+    default:
+        Protocol_Reset();
+        break;
+    }
+}
+
+void Protocol_ProcessBytes(const uint8_t *data, uint16_t length)
+{
+    if (data == NULL) {
+        return;
     }
 
-    return consumed;
+    for (uint16_t i = 0u; i < length; ++i) {
+        process_byte(data[i]);
+    }
 }
-
-/* ====================================================================== */
-/*  PAYLOAD 封包 (结构体 → 字节流)                                        */
-/* ====================================================================== */
-
-uint16_t PackCarMove(const CarMove_t *cmd, uint8_t *out, uint16_t out_size)
-{
-    if (cmd == NULL || out == NULL || out_size < 4) return 0;
-
-    out[0] = (uint8_t)(cmd->direction & 0xFFu);
-    out[1] = (uint8_t)((cmd->direction >> 8) & 0xFFu);
-    out[2] = (uint8_t)(cmd->distance & 0xFFu);
-    out[3] = (uint8_t)((cmd->distance >> 8) & 0xFFu);
-
-    return 4;
-}
-
-uint16_t PackGrasp(const Grasp_t *cmd, uint8_t *out, uint16_t out_size)
-{
-    if (cmd == NULL || out == NULL || out_size < 7) return 0;
-
-    out[0] = (uint8_t)(cmd->x_error & 0xFFu);
-    out[1] = (uint8_t)((cmd->x_error >> 8) & 0xFFu);
-    out[2] = (uint8_t)(cmd->y_error & 0xFFu);
-    out[3] = (uint8_t)((cmd->y_error >> 8) & 0xFFu);
-    out[4] = cmd->grasp;
-    out[5] = (uint8_t)(cmd->tray_num & 0xFFu);
-    out[6] = (uint8_t)((cmd->tray_num >> 8) & 0xFFu);
-
-    return 7;
-}
-
-uint16_t PackEmergency(const Emergency_t *cmd, uint8_t *out, uint16_t out_size)
-{
-    if (cmd == NULL || out == NULL || out_size < 1) return 0;
-
-    out[0] = cmd->correct;
-
-    return 1;
-}
-
-uint16_t PackAckAck(const AckAck_t *ack, uint8_t *out, uint16_t out_size)
-{
-    if (ack == NULL || out == NULL || out_size < 3) return 0;
-
-    out[0] = ack->received;
-    out[1] = (uint8_t)(ack->sequence & 0xFFu);
-    out[2] = (uint8_t)((ack->sequence >> 8) & 0xFFu);
-
-    return 3;
-}
-
-uint16_t PackAckEvent(const AckEvent_t *evt, uint8_t *out, uint16_t out_size)
-{
-    if (evt == NULL || out == NULL || out_size < 1) return 0;
-
-    out[0] = evt->finished;
-
-    return 1;
-}
-
-uint16_t PackPosition(const Position_t *pos, uint8_t *out, uint16_t out_size)
-{
-    if (pos == NULL || out == NULL || out_size < 4) return 0;
-
-    out[0] = (uint8_t)(pos->x & 0xFFu);
-    out[1] = (uint8_t)((pos->x >> 8) & 0xFFu);
-    out[2] = (uint8_t)(pos->y & 0xFFu);
-    out[3] = (uint8_t)((pos->y >> 8) & 0xFFu);
-
-    return 4;
-}
-
-/* ====================================================================== */
-/*  PAYLOAD 拆包 (字节流 → 结构体)                                        */
-/* ====================================================================== */
-
-uint8_t UnpackCarMove(const uint8_t *data, uint16_t len, CarMove_t *cmd)
-{
-    if (data == NULL || cmd == NULL || len < 4) return 0u;
-
-    cmd->direction = (int16_t)(data[0] | ((uint16_t)data[1] << 8));
-    cmd->distance  = (int16_t)(data[2] | ((uint16_t)data[3] << 8));
-
-    return 1u;
-}
-
-uint8_t UnpackGrasp(const uint8_t *data, uint16_t len, Grasp_t *cmd)
-{
-    if (data == NULL || cmd == NULL || len < 7) return 0u;
-
-    cmd->x_error  = (int16_t)(data[0] | ((uint16_t)data[1] << 8));
-    cmd->y_error  = (int16_t)(data[2] | ((uint16_t)data[3] << 8));
-    cmd->grasp     = data[4];
-    cmd->tray_num  = (int16_t)(data[5] | ((uint16_t)data[6] << 8));
-
-    return 1u;
-}
-
-uint8_t UnpackEmergency(const uint8_t *data, uint16_t len, Emergency_t *cmd)
-{
-    if (data == NULL || cmd == NULL || len < 1) return 0u;
-
-    cmd->correct = data[0];
-
-    return 1u;
-}
-
-uint16_t PackMoveAdjust(const MoveAdjust_t *cmd, uint8_t *out, uint16_t out_size)
-{
-    if (cmd == NULL || out == NULL || out_size < 4) return 0;
-
-    out[0] = (uint8_t)(cmd->x & 0xFFu);
-    out[1] = (uint8_t)((cmd->x >> 8) & 0xFFu);
-    out[2] = (uint8_t)(cmd->y & 0xFFu);
-    out[3] = (uint8_t)((cmd->y >> 8) & 0xFFu);
-
-    return 4;
-}
-
-uint8_t UnpackMoveAdjust(const uint8_t *data, uint16_t len, MoveAdjust_t *cmd)
-{
-    if (data == NULL || cmd == NULL || len < 4) return 0u;
-
-    cmd->x = (int16_t)(data[0] | ((uint16_t)data[1] << 8));
-    cmd->y = (int16_t)(data[2] | ((uint16_t)data[3] << 8));
-
-    return 1u;
-}
-
-uint16_t PackColorConfirm(const ColorConfirm_t *cmd, uint8_t *out, uint16_t out_size)
-{
-    if (cmd == NULL || out == NULL || out_size < 1) return 0;
-
-    out[0] = cmd->color;
-
-    return 1;
-}
-
-uint8_t UnpackColorConfirm(const uint8_t *data, uint16_t len, ColorConfirm_t *cmd)
-{
-    if (data == NULL || cmd == NULL || len < 1) return 0u;
-
-    cmd->color = data[0];
-
-    return 1u;
-}
-
-uint8_t UnpackAckAck(const uint8_t *data, uint16_t len, AckAck_t *ack)
-{
-    if (data == NULL || ack == NULL || len < 3) return 0u;
-
-    ack->received = data[0];
-    ack->sequence  = (int16_t)(data[1] | ((uint16_t)data[2] << 8));
-
-    return 1u;
-}
-
-uint8_t UnpackAckEvent(const uint8_t *data, uint16_t len, AckEvent_t *evt)
-{
-    if (data == NULL || evt == NULL || len < 1) return 0u;
-
-    evt->finished = data[0];
-
-    return 1u;
-}
-
-uint8_t UnpackPosition(const uint8_t *data, uint16_t len, Position_t *pos)
-{
-    if (data == NULL || pos == NULL || len < 4) return 0u;
-
-    pos->x = (int16_t)(data[0] | ((uint16_t)data[1] << 8));
-    pos->y = (int16_t)(data[2] | ((uint16_t)data[3] << 8));
-
-    return 1u;
-}
-

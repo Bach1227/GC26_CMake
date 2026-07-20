@@ -1,147 +1,118 @@
-# GC26 底盘控制项目
+# 上下位机任务通信协议
 
-STM32H723 平台，FreeRTOS 实时系统，控制 ZDT 步进电机底盘 + DM 编码器电机。
+`task/` 实现上位机侧的组帧、解析和串口流程；`embedded/protocol.c/.h` 是 STM32
+工程的接入样例。嵌入式样例依赖下位机工程提供的 `ChassisControl.h`、`config.h`
+和 `statemachine.h`，因此不会由本仓库的顶层 CMake 单独构建。
 
-## 目录结构
+## 串口参数
 
-```
-App/                  # 应用层代码
-├── ChassisControl.c/h   底盘控制 (队列驱动移动 + DM 电机 PID)
-├── statemachine.c/h     查表法状态机 (事件队列驱动)
-├── protocol.c/h         上位机通讯协议解析
-├── PID.c/h              浮点/定点 PID 控制器
-├── comm_manager.c/h     串口 DMA 收发管理
-├── interrupthandle.c    中断处理 (UART + CAN)
-├── MoveControl.c        移动控制
-└── DataStructure.h      通用数据结构和工具
+- 接口：UART7
+- 波特率：115200
+- 数据格式：8N1
+- 数据方向：双向；上位机发送任务帧，STM32 接收
+- 物料顺序使用“原帧回显”确认；视觉反馈不使用 ACK
 
-Bsp/                  # 板级支持包
-├── bsp_can.c/h          FDCAN 底层收发
-├── bsp_zdt.c/h          ZDT 步进电机驱动 (CAN)
-├── bsp_dm.c/h           DM 编码器电机驱动 (CAN MIT 协议)
+## 帧格式
 
-Core/                 # HAL + RTOS 初始化
-├── Src/main.c           主函数
-├── Src/freertos.c       FreeRTOS 初始化 + 任务创建
-└── Inc/fdcan.h          FDCAN 句柄声明
+```text
+AA 55 CMD LEN PAYLOAD... CHECKSUM
 ```
 
-## 核心架构
+| 字段 | 长度 | 说明 |
+|---|---:|---|
+| `AA 55` | 2字节 | 固定帧头 |
+| `CMD` | 1字节 | 命令 |
+| `LEN` | 1字节 | PAYLOAD 字节数，最大 6 |
+| `PAYLOAD` | 0～6字节 | 命令数据 |
+| `CHECKSUM` | 1字节 | `(CMD + LEN + PAYLOAD所有字节) & 0xFF` |
 
-```
-上位机 (串口)
-    │  AA 55 ... 协议帧
-    ↓
-comm_manager (DMA 双缓冲)
-    → protocol.c Protocol_ParseBuffer → Protocol_Dispatch
-        │
-        ├── CMD_CAR_MOVE  → Chassis_OnCarMove()   (旧式直接移动)
-        ├── CMD_MOVE_ADJUST → SM_SetAdjustOffset() (视觉偏差)
-        └── CMD_GRASP/EMERGENCY → ...其他命令
+颜色编号统一为：
 
-状态机 (statemachine)
-    │  事件队列 (xQueue)
-    │  SM_SendEvent → SM_Task → SM_ProcessEvent
-    │                              → Action_xxx → Chassis_SendMoveCmd()
-    ↓
-Chassis_Task (队列驱动)
-    │  xQueueReceive 阻塞等命令
-    │  → 逆运动学 Chassis_IK → 四轮 wheel_position → ZDT_SyncTrigger
-    │  → 软件定时器轮询到位标志
-    ↓
-CAN 总线
-    ├── ZDT 步进电机 (位置模式, 回传 FD+9F 到位)
-    └── DM 编码器电机 (MIT 协议, 速度模式)
+```text
+0 = 未识别
+1 = 红色
+2 = 绿色
+3 = 蓝色
 ```
 
-### 状态机流转
+## 命令
 
-```
-IDLE ─START→ MOVE_TO_QR ─ARRIVED_QR→ READ_QR
-  ↑                                        │
-  │                                   QR_PARSED
-  │                                        ↓
-RETURN ←ALL_DONE─ TRANSFER_TEMP ←ARRIVED_TEMP─ MOVE_TO_TEMP
-  ↑                    │                          ↑
-  │              BATCH1_NEED_NEXT                 │
-  │                    ↓                          │
-  │              MOVE_TO_RAW ─ARRIVED_RAW→ CHECK_RAW
-  │                    ↑                    │
-  │                    │              ADJUSTED / MISALIGN
-  │                    │                    │
-  │                    │               FETCH_RAW ← 修正循环
-  │                    │                    │
-  │                    │              FETCH_DONE
-  │                    │                    ↓
-  │                    │              MOVE_TO_ROUGH ─ARRIVED_ROUGH→ CHECK_ROUGH
-  │                    │                                         │
-  │                    │                                    ADJUSTED / MISALIGN
-  │                    │                                         │
-  │                    │                                    PLACE_ROUGH ← 修正循环
-  │                    │                                         │
-  │                    │                                   PLACE_ROUGH_DONE
-  │                    └───────────────────────────────────────┘ (循环第二批)
-  │
-  └───────────────────────────────────────────────────────────────┘ (返航)
+### 0x01 设置两轮物料顺序
+
+```text
+LEN = 6
+PAYLOAD = ROUND_1_COLOR_1 ROUND_1_COLOR_2 ROUND_1_COLOR_3
+          ROUND_2_COLOR_1 ROUND_2_COLOR_2 ROUND_2_COLOR_3
 ```
 
-## TODO List
+二维码文本格式为 `123+321`。加号两侧必须分别是 `1、2、3` 的不重复排列。
+状态机到达二维码位置后保存两轮物料顺序。
 
-### 状态机动作函数
-- [ ] `Action_ParseQR` — 实现二维码读取与解析, 完成后 `SM_SendEvent(EVENT_QR_PARSED)`
-- [ ] `Action_FetchRaw` — 实现原料区抓取, 完成后 `SM_SendEvent(EVENT_FETCH_DONE)`
-- [ ] `Action_PlaceRough` — 实现粗加工区放置, 完成后 `SM_SendEvent(EVENT_PLACE_ROUGH_DONE)`
-- [ ] `Action_TransferTemp` — 实现暂存区放置/码垛, 根据批次决定发 `BATCH1_DONE_NEED_NEXT` 或 `ALL_BATCHES_DONE`
+示例：第一轮红绿蓝、第二轮蓝绿红（`123+321`）：
 
-### 移动参数调整
-- [ ] 标定各目标点实际坐标 (QR/原料区/粗加工区/暂存区) → 修改 `Chassis_SendMoveCmd` 参数
-- [ ] 标定 `WHEEL_BASE`、`PULSES_PER_REV`、`WHEEL_RADIUS` 等运动学参数
-- [ ] 调整 `POS_SPEED_RPM` / `POS_ACCEL` 使移动速度和加速度符合要求
-
-### 视觉反馈闭环
-- [ ] 上位机视觉程序开发: 检测底盘到位偏差 → 发 `CMD_MOVE_ADJUST(x, y)`
-- [ ] 本地传感器/视觉对接: 替代 `SM_SetAdjustOffset` 的桩代码
-- [ ] 校准 `ALIGN_THRESHOLD_MM` (当前 5mm)
-
-### DM 编码器电机
-- [ ] 确认 DM 电机 CAN ID 和 MIT 协议参数匹配实际硬件
-- [ ] 调整 `DM_PID_Kp/Ki/Kd` 使角度闭环响应满足要求
-- [ ] 陀螺仪闭环替代开环旋转 (当前 `Chassis_IK` 旋转分量已置 0)
-
-### CAN 总线
-- [ ] `CAN_FilterInit()` 当前未调用, 如需接收需在初始化中加入
-- [ ] ZDT 到位检测依赖电机回传 `FD+9F`, 验证此协议是否与实际硬件匹配
-- [ ] 确认 FDCAN 波特率与上位机 CAN 工具一致
-
-### 协议
-- [ ] `CMD_MOVE_ADJUST` 由上机位在每次到位后发送, 带实时偏差值
-- [ ] 确认 `CMD_GRASP` / `CMD_EMERGENCY` 命令处理与硬件匹配
-
-### 调试与测试
-- [ ] 开环单体测试: Chassis_SendMoveCmd 正常驱动四轮
-- [ ] 到位检测测试: ZDT 电机回传 FD+9F 被正确识别
-- [ ] 状态机流程测试: 完整跑一遍 IDLE → ... → IDLE
-- [ ] 异常处理: ZDT_WaitMoveDone 超时 (5s) 的容错逻辑
-
-## API 速查
-
-```c
-// 底盘移动
-Chassis_SendMoveCmd(x_mm, y_mm, EVENT_ARRIVED_xxx);  // 下发移动 (非阻塞)
-Chassis_OnCarMove(&car_move);                          // 旧式直接移动
-
-// 状态机
-SM_Init();                                              // 初始化 (默认表 + STATE_IDLE)
-SM_SendEvent(EVENT_xxx);                                // 从任务发事件
-SM_SendEventFromISR(EVENT_xxx);                         // 从中断发事件
-SM_SetAdjustOffset(x_mm, y_mm);                         // 写入视觉偏差
-SM_GetState();                                          // 获取当前状态
-
-// DM 电机
-Chassis_Init_DM(&hfdcan1);                              // 初始化
-Chassis_Set_DM_Target(angle_rad);                       // 设置目标角度
-
-// 到位检测
-ZDT_WaitMoveDone(addr, timeout_ms);                     // 等待电机到位
-ZDT_OnRxMessage(ext_id, data, dlc);                     // CAN 回调 (检测 FD+9F)
+```text
+AA 55 01 06 01 02 03 03 02 01 13
 ```
+
+STM32 收到帧头、长度、校验和及两组排列都合法的 `0x01` 后，必须通过 UART
+逐字节发回完全相同的 11 字节帧。上位机每 500 ms 重发一次，只有收到完全一致的
+回显才启动物料识别。重复收到合法帧时仍应回显，以处理上一次回显在链路中丢失的情况。
+
+### 0x02 视觉反馈
+
+```text
+LEN = 4
+PAYLOAD = COLOR OFFSET_X OFFSET_Y IS_STATIC
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `COLOR` | `uint8` | `0`=未识别，`1`=红，`2`=绿，`3`=蓝 |
+| `OFFSET_X` | `int8` | X 归一化偏差，右为正，范围 -127～127 |
+| `OFFSET_Y` | `int8` | Y 归一化偏差，下为正，范围 -127～127 |
+| `IS_STATIC` | `uint8` | `0`=物体运动中，`1`=物体静止 |
+
+上位机先在当前工作画面中计算像素偏差：
+
+```text
+DX_PIXEL = TARGET_X - FRAME_WIDTH / 2
+DY_PIXEL = TARGET_Y - FRAME_HEIGHT / 2
+```
+
+再分别归一化并四舍五入：
+
+```text
+OFFSET_X = clamp(round(DX_PIXEL / (FRAME_WIDTH / 2) * 127), -127, 127)
+OFFSET_Y = clamp(round(DY_PIXEL / (FRAME_HEIGHT / 2) * 127), -127, 127)
+```
+
+因此线上偏差是无量纲的归一化控制量，不是毫米，也不是原始像素。`COLOR=0`
+同时承担“未识别”标志，此时 X、Y 和 `IS_STATIC` 都发送 0。
+
+上位机只从已经跟踪且完成跨帧投票的圆中选择目标，并发送距离画面中心最近的圆。
+同一目标连续 5 帧的相邻圆心位移不超过 2 像素时，`IS_STATIC=1`。
+
+STM32 始终保存合法颜色。在 `STATE_ADJUST_*` 状态中：
+
+- `IS_STATIC=0`：按照 `OFFSET_X/OFFSET_Y` 执行一次微调。
+- `IS_STATIC=1`：不执行偏差移动，产生 `EVENT_ADJUST_DONE` 并进入下一动作。
+
+示例：识别为绿色，归一化 X=-10、Y=5，物体仍在运动：
+
+```text
+AA 55 02 04 02 F6 05 00 03
+```
+
+## 异常处理
+
+- 帧头、长度、校验或命令参数非法时直接丢弃。
+- 解析器支持半帧、连续多帧和帧前噪声，并自动重新搜索 `AA 55`。
+- 物料任务开始后，两轮物料顺序不再允许修改；重复帧仍需回显。
+- 非视觉调整状态收到视觉反馈时只保存合法颜色，不执行偏差移动或状态切换。
+
+## 下位机接入契约
+
+- 状态机提供 `SM_SetMaterialSequences(first, second)`，一次保存两组各 3 字节顺序。
+- UART 驱动在初始化时通过 `Protocol_SetTransmitCallback()` 注册发送函数。
+- 发送回调必须在返回前复制或同步发送传入帧；协议层缓冲区仅在调用期间有效。
+- 下位机将 `OFFSET_X/OFFSET_Y` 作为归一化控制误差使用，不再按毫米解释。
