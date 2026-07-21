@@ -116,12 +116,13 @@
 #define CONFIG_GIMBAL_GRIPPER_WAIT_MS          200U
 
 /*
- * 伸展电机到地图工位的相对脉冲。
- * 地面取放和码垛共用，每个位置可独立调整。
+ * 位置 2（同时也是 Raw 取料位置）为伸缩原点。
+ * 地面取放和码垛共用地图偏移；访问车体时从原点缩短。
  */
 #define CONFIG_GIMBAL_MAP_EXTEND_POS_1_PULSES  -2000L
-#define CONFIG_GIMBAL_MAP_EXTEND_POS_2_PULSES  -1000L
+#define CONFIG_GIMBAL_MAP_EXTEND_POS_2_PULSES      0L
 #define CONFIG_GIMBAL_MAP_EXTEND_POS_3_PULSES  -2000L
+#define CONFIG_GIMBAL_CAR_RETRACT_PULSES          300L
 
 /*
  * 夹爪舵机 PWM：TIM1 已配置为 1 MHz 计数、20 ms 周期，因此 CCR 数值

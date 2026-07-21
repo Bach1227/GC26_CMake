@@ -14,9 +14,6 @@
 #include <math.h>
 #include "tim.h"
 
-/* 共享变量 (statemachine.c 中定义) */
-extern uint8_t seq[2][3];
-
 /* ====================================================================== */
 /*  配置                                                                  */
 /* ====================================================================== */
@@ -266,14 +263,6 @@ void Gimbal_Gripper(uint32_t pulse)
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, pulse);
 }
 
-/* ====================================================================== */
-/*  复合命令 — 取料序列 (内部直接调 Gimbal_* API)                        */
-/* ====================================================================== */
-
-#define FETCH_PICKUP_EXTEND  1500
-#define FETCH_PLACE_EXTEND   300
-#define FETCH_EXTEND_DIFF    (FETCH_PICKUP_EXTEND - FETCH_PLACE_EXTEND)
-
 static float fetch_car_angle(uint8_t pos)
 {
     float deg;
@@ -282,92 +271,6 @@ static float fetch_car_angle(uint8_t pos)
     else               deg = CONFIG_CAR_MATERIAL_POS_3_DEG;
     if (deg > 180.0f) deg -= 360.0f;
     return deg;
-}
-
-static void wait_material_moved_and_settled(uint32_t *settled_sequence)
-{
-    uint32_t current_sequence;
-
-    do {
-        osDelay(10);
-        current_sequence = Protocol_GetMaterialSettledSequence();
-    } while (current_sequence == *settled_sequence);
-
-    *settled_sequence = current_sequence;
-}
-
-static uint8_t wait_current_material_color(void)
-{
-    uint8_t color;
-
-    do {
-        color = g_vision_feedback.color;
-        if (color < PROTOCOL_COLOR_RED || color > PROTOCOL_COLOR_BLUE) {
-            osDelay(10);
-        }
-    } while (color < PROTOCOL_COLOR_RED || color > PROTOCOL_COLOR_BLUE);
-
-    return color;
-}
-
-static void ExecFetchRaw(Event_t done_event)
-{
-    uint32_t settled_sequence = Protocol_GetMaterialSettledSequence();
-    // ZDT_SetVelocity(ZDT_ID_LIFT, ZDT_DIR_CW,
-    //                 CONFIG_STEPPER_LIFT_SPEED_RPM,
-    //                 CONFIG_STEPPER_LIFT_ACCEL,
-    //                 ZDT_SYNC_IMMEDIATE);
-
-    float folded_angle = CONFIG_MAP_MATERIAL_POS_2_DEG;
-    Gimbal_SetAngle(folded_angle);
-    osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
-    // Gimbal_Extend(FETCH_PICKUP_EXTEND);
-    osDelay(100);
-    Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US);
-    osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
-    wait_material_moved_and_settled(&settled_sequence);
-
-    for (int i = 0; i < 3; i++)
-    {
-        uint8_t material_color = wait_current_material_color();
-
-        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
-        osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
-        Gimbal_Gripper(CONFIG_GRIPPER_CLOSE_PULSE_US);
-        osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
-        Gimbal_Lift(CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
-        osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
-
-        Gimbal_Extend(-FETCH_EXTEND_DIFF);
-        osDelay(100);
-
-        float angle = fetch_car_angle(material_color);
-        Gimbal_SetAngle(angle);
-        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
-
-        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
-        Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US);
-        osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
-        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
-
-        Gimbal_Extend(FETCH_EXTEND_DIFF);
-        osDelay(100);
-
-        float folded_angle = CONFIG_MAP_MATERIAL_POS_2_DEG;
-        Gimbal_SetAngle(folded_angle);
-        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
-    }
-
-    Gimbal_Extend(-FETCH_PICKUP_EXTEND);
-    osDelay(100);
-
-
-
-    if (done_event != EVENT_NONE) {
-        SM_SendEvent(done_event);
-    }
 }
 
 static void ExecVisionPickup(Event_t done_event)
@@ -390,6 +293,9 @@ static void ExecVisionPickup(Event_t done_event)
         osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
     }
 
+    Gimbal_Extend(-CONFIG_GIMBAL_CAR_RETRACT_PULSES);
+    osDelay(100);
+
     float car_target = fetch_car_angle(color);
     Gimbal_SetAngle(car_target);
     osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
@@ -407,6 +313,8 @@ static void ExecVisionPickup(Event_t done_event)
         osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
     }
 
+    Gimbal_Extend(CONFIG_GIMBAL_CAR_RETRACT_PULSES);
+    osDelay(100);
     Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
 
     if (done_event != EVENT_NONE) {
@@ -430,9 +338,6 @@ void Gimbal_CmdTask(void *argument)
         xQueueReceive(gimbal_cmd_queue, &cmd, portMAX_DELAY);
 
         switch (cmd.type) {
-        case GIMBAL_CMD_FETCH_RAW:
-            ExecFetchRaw(cmd.completion_event);
-            break;
         case GIMBAL_CMD_VISION_PICKUP:
             ExecVisionPickup(cmd.completion_event);
             break;
