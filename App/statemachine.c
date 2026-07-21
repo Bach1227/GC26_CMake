@@ -226,7 +226,7 @@ static void FetchRawToCar(void)
     Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
     osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
     Gripper_Open();
-    osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
+    // osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
 
     /* Raw/地图位置 2 为伸缩原点，每次进入 Raw 只确认一次动后静止。 */
     wait_material_moved_and_settled(&settled_sequence);
