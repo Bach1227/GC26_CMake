@@ -321,7 +321,7 @@ static void ExecFetchRaw(Event_t done_event)
     float folded_angle = CONFIG_MAP_MATERIAL_POS_2_DEG;
     Gimbal_SetAngle(folded_angle);
     osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
-    Gimbal_Extend(FETCH_PICKUP_EXTEND);
+    // Gimbal_Extend(FETCH_PICKUP_EXTEND);
     osDelay(100);
     Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US);
     osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);

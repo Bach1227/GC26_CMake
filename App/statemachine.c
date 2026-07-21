@@ -226,7 +226,7 @@ static void Action_MoveToRaw1(void)
         // osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
     #endif
     SM_ChassisRotate(CONFIG_CHASSIS_RAW_HEADING_DEG, EVENT_NONE);
-    SM_ChassisMove(1150, 0, EVENT_ARRIVED);
+    SM_ChassisMove(1050, 0, EVENT_ARRIVED);
 }
 
 static void Action_FetchRaw1(void)
@@ -241,7 +241,7 @@ static void Action_FetchRaw1(void)
 
 static void Action_MoveToRough1(void)
 {
-    SM_ChassisMove(-600, 0, EVENT_NONE);        /* 左移到主干道 */
+    SM_ChassisMove(-550, 0, EVENT_NONE);        /* 左移到主干道 */
     SM_ChassisRotate(CONFIG_CHASSIS_ROUGH_HEADING_DEG, EVENT_NONE); /* 陀螺仪闭环 */
     SM_ChassisMove(0, -2050, EVENT_ARRIVED);      /* 直行到粗加工区 */
 }
@@ -394,7 +394,7 @@ static void Action_PlaceTemp1(void)
 
 static void Action_MoveToRaw2(void)
 {
-    SM_ChassisMove(-1150, 0, EVENT_NONE);
+    SM_ChassisMove(-1050, 0, EVENT_NONE);
     SM_ChassisRotate(CONFIG_CHASSIS_RAW_HEADING_DEG, EVENT_NONE);
     SM_ChassisMove(-650, 0, EVENT_ARRIVED);
 }
@@ -450,7 +450,7 @@ static void Action_FetchRaw2(void)
 
 static void Action_MoveToRough2(void)
 {
-    SM_ChassisMove(-600, 0, EVENT_NONE);        /* 左移到主干道 */
+    SM_ChassisMove(-550, 0, EVENT_NONE);        /* 左移到主干道 */
     SM_ChassisRotate(CONFIG_CHASSIS_ROUGH_HEADING_DEG, EVENT_NONE); /* 陀螺仪闭环 */
     SM_ChassisMove(0, -2050, EVENT_ARRIVED);      /* 直行到粗加工区 */
 }
@@ -593,8 +593,9 @@ static void Action_StackTemp2(void)
 
 static void Action_ReturnStart(void)
 {
+    SM_ChassisMove(50, 0, EVENT_ARRIVED);
     SM_ChassisMove(0, 2300, EVENT_NONE);
-    SM_ChassisMove(-1200, 0, EVENT_ARRIVED);
+    SM_ChassisMove(-1250, 0, EVENT_ARRIVED);
 }
 
 /* ====================================================================== */

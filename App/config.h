@@ -5,7 +5,7 @@
 #define CONFIG_USE_GIMBAL              1
 
 /* 是否执行物料取放：1=执行车体/地图取放与码垛，0=跳过并继续状态机。 */
-#define CONFIG_ENABLE_MATERIAL_PLACEMENT  0
+#define CONFIG_ENABLE_MATERIAL_PLACEMENT  1
 
 /* 底盘控制：1=正常执行移动，0=状态机直接模拟到达并跳过移动。 */
 #define CONFIG_USE_CHASSIS                1
@@ -78,8 +78,8 @@
 #define CONFIG_CHASSIS_HEADING_DEAD_DEG     0.5f
 
 /* 视觉微调：X/Y 使用 PID 框架的纯 P 闭环，输入为归一化偏差。 */
-#define CONFIG_VISION_ADJUST_MODE_SEQUENTIAL    0
-#define CONFIG_VISION_ADJUST_MODE_SIMULTANEOUS  1
+#define CONFIG_VISION_ADJUST_MODE_SEQUENTIAL    1
+#define CONFIG_VISION_ADJUST_MODE_SIMULTANEOUS  0
 /* 在上述两种模式中选择一种。 */
 #define CONFIG_VISION_ADJUST_MODE \
     CONFIG_VISION_ADJUST_MODE_SEQUENTIAL
@@ -90,8 +90,8 @@
 #endif
 
 #define CONFIG_VISION_ADJUST_KP_X            1.0f
-#define CONFIG_VISION_ADJUST_KP_Y            -0.4f
-#define CONFIG_VISION_ADJUST_DEADZONE        5.0f
+#define CONFIG_VISION_ADJUST_KP_Y            -0.6f
+#define CONFIG_VISION_ADJUST_DEADZONE        10.0f
 #define CONFIG_VISION_ADJUST_RPM_LIMIT       15.0f
 #define CONFIG_VISION_ADJUST_YAW_RPM_LIMIT   10.0f
 #define CONFIG_VISION_ADJUST_PERIOD_MS       20U
