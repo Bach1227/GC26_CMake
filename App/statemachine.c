@@ -36,10 +36,8 @@ uint8_t seq[2][3] = {
 static volatile bool sm_material_sequence_ready = false;
 static volatile bool sm_material_sequence_event_sent = false;
 
-/* 颜色校验 (被 protocol.c 和 gimbal.c 引用, 始终定义) */
-const uint8_t expected_color[4] = {0, 2, 1, 3};
+/* 最近一次识别到的颜色，仅保留用于状态观察。 */
 volatile uint8_t g_current_color = 0;
-volatile bool    g_color_pending = false;
 
 #if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
 
@@ -59,17 +57,30 @@ static int32_t map_extend(uint8_t pos)
 static void Gripper_Close(void) { Gimbal_Gripper(CONFIG_GRIPPER_CLOSE_PULSE_US); }
 static void Gripper_Open(void)  { Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US); }
 
-static bool wait_expected_color(uint8_t pos)
+static void wait_material_moved_and_settled(uint32_t *settled_sequence)
 {
-#if CONFIG_SKIP_COLOR_CONFIRM
-    (void)pos;
-    return true;
-#else
-    g_color_pending = true;
-    while (g_color_pending)
+    uint32_t current_sequence;
+
+    do {
         osDelay(10);
-    return g_current_color == expected_color[pos];
-#endif
+        current_sequence = Protocol_GetMaterialSettledSequence();
+    } while (current_sequence == *settled_sequence);
+
+    *settled_sequence = current_sequence;
+}
+
+static uint8_t wait_current_material_color(void)
+{
+    uint8_t color;
+
+    do {
+        color = g_vision_feedback.color;
+        if (color < PROTOCOL_COLOR_RED || color > PROTOCOL_COLOR_BLUE) {
+            osDelay(10);
+        }
+    } while (color < PROTOCOL_COLOR_RED || color > PROTOCOL_COLOR_BLUE);
+
+    return color;
 }
 
 #endif /* USE_GIMBAL && CONFIG_ENABLE_MATERIAL_PLACEMENT */
@@ -391,25 +402,27 @@ static void Action_MoveToRaw2(void)
 static void Action_FetchRaw2(void)
 {
 #if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
-    /* 同第一批: 伸出→等颜色→夹取→转放料位→释放→归零 */
+    uint32_t settled_sequence = Protocol_GetMaterialSettledSequence();
+
+    /* 同第一批: 伸出→等待运动后静止→夹取→转放料位→释放→归零 */
     Gimbal_Extend(PICKUP_EXTEND);
     osDelay(100);
+    wait_material_moved_and_settled(&settled_sequence);
 
     for (int i = 0; i < 3; i++)
     {
-        if (wait_expected_color(seq[1][i]))
-        {
-            Gimbal_Lift(-CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
-            osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
-            Gripper_Close();
-            osDelay(200);
-            Gimbal_Lift(CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
-            osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
-        }
+        uint8_t material_color = wait_current_material_color();
+
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
+        Gripper_Close();
+        osDelay(200);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
 
         Gimbal_Extend(-EXTEND_DIFF);
         osDelay(100);
-        float angle = car_angle(seq[1][i]);
+        float angle = car_angle(material_color);
         Gimbal_SetAngle(angle);
         osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
@@ -713,7 +726,6 @@ void SM_SetCurrentColor(uint8_t color)
         return;
     }
     g_current_color = color;
-    g_color_pending = false;
 }
 
 /* ====================================================================== */

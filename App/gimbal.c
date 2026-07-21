@@ -284,8 +284,35 @@ static float fetch_car_angle(uint8_t pos)
     return deg;
 }
 
+static void wait_material_moved_and_settled(uint32_t *settled_sequence)
+{
+    uint32_t current_sequence;
+
+    do {
+        osDelay(10);
+        current_sequence = Protocol_GetMaterialSettledSequence();
+    } while (current_sequence == *settled_sequence);
+
+    *settled_sequence = current_sequence;
+}
+
+static uint8_t wait_current_material_color(void)
+{
+    uint8_t color;
+
+    do {
+        color = g_vision_feedback.color;
+        if (color < PROTOCOL_COLOR_RED || color > PROTOCOL_COLOR_BLUE) {
+            osDelay(10);
+        }
+    } while (color < PROTOCOL_COLOR_RED || color > PROTOCOL_COLOR_BLUE);
+
+    return color;
+}
+
 static void ExecFetchRaw(Event_t done_event)
 {
+    uint32_t settled_sequence = Protocol_GetMaterialSettledSequence();
     // ZDT_SetVelocity(ZDT_ID_LIFT, ZDT_DIR_CW,
     //                 CONFIG_STEPPER_LIFT_SPEED_RPM,
     //                 CONFIG_STEPPER_LIFT_ACCEL,
@@ -298,22 +325,23 @@ static void ExecFetchRaw(Event_t done_event)
     osDelay(100);
     Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US);
     osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
+    wait_material_moved_and_settled(&settled_sequence);
+
     for (int i = 0; i < 3; i++)
     {
-        // if (wait_expected_color(seq[0][i]))
-        // {
-            Gimbal_Lift(-CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
-            osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
-            Gimbal_Gripper(CONFIG_GRIPPER_CLOSE_PULSE_US);
-            osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
-            Gimbal_Lift(CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
-            osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
-        // }
+        uint8_t material_color = wait_current_material_color();
+
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
+        Gimbal_Gripper(CONFIG_GRIPPER_CLOSE_PULSE_US);
+        osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
 
         Gimbal_Extend(-FETCH_EXTEND_DIFF);
         osDelay(100);
 
-        float angle = fetch_car_angle(seq[0][i]);
+        float angle = fetch_car_angle(material_color);
         Gimbal_SetAngle(angle);
         osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 

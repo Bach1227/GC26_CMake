@@ -27,6 +27,8 @@ typedef struct {
 
 static ProtocolParser_t parser;
 static ProtocolTransmitCallback_t transmit_callback;
+static bool material_motion_seen = false;
+static volatile uint32_t material_settled_sequence = 0u;
 
 volatile ProtocolVisionFeedback_t g_vision_feedback = {
     .color = 0u,
@@ -34,6 +36,16 @@ volatile ProtocolVisionFeedback_t g_vision_feedback = {
     .offset_y = 0,
     .is_static = 0u,
 };
+
+static void update_material_motion_state(uint8_t is_static)
+{
+    if (is_static == 0u) {
+        material_motion_seen = true;
+    } else if (material_motion_seen) {
+        material_motion_seen = false;
+        ++material_settled_sequence;
+    }
+}
 
 #if CONFIG_VISION_ADJUST_ONLY && CONFIG_USE_CHASSIS
 /*
@@ -150,6 +162,7 @@ static void dispatch_frame(uint8_t command, const uint8_t *payload,
                 .is_static = payload[3],
             };
 
+            update_material_motion_state(feedback.is_static);
             g_vision_feedback.color = feedback.color;
             g_vision_feedback.offset_x = feedback.offset_x;
             g_vision_feedback.offset_y = feedback.offset_y;
@@ -197,6 +210,11 @@ static void dispatch_frame(uint8_t command, const uint8_t *payload,
     default:
         break;
     }
+}
+
+uint32_t Protocol_GetMaterialSettledSequence(void)
+{
+    return material_settled_sequence;
 }
 
 void Protocol_Reset(void)

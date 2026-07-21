@@ -17,9 +17,6 @@
  */
 #define CONFIG_VISION_ADJUST_ONLY         0
 
-/* 跳过取料时的颜色确认，并按颜色匹配成功继续动作。 */
-#define CONFIG_SKIP_COLOR_CONFIRM      1
-
 /* 跳过二维码物料顺序：1=使用默认顺序 {2, 3, 1} 直接继续，0=等待上位机下发。 */
 #define CONFIG_SKIP_QR                 1
 

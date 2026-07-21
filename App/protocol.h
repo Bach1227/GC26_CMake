@@ -36,7 +36,7 @@ typedef struct {
     uint8_t color;       /* 0=未识别，1=红，2=绿，3=蓝 */
     int8_t  offset_x;    /* X 归一化偏差，右正，范围 -127~127 */
     int8_t  offset_y;    /* Y 归一化偏差，下正，范围 -127~127 */
-    uint8_t is_static;   /* 0=仅保存不闭环，1=该帧参与视觉闭环 */
+    uint8_t is_static;   /* 0=物料运动中且不闭环，1=物料静止且可参与闭环 */
 } ProtocolVisionFeedback_t;
 
 _Static_assert(sizeof(ProtocolVisionFeedback_t) == 4u,
@@ -44,6 +44,9 @@ _Static_assert(sizeof(ProtocolVisionFeedback_t) == 4u,
 
 /** Latest valid vision feedback received from the upper computer. */
 extern volatile ProtocolVisionFeedback_t g_vision_feedback;
+
+/** 每检测到一次“运动后重新静止”，返回值递增一次。 */
+uint32_t Protocol_GetMaterialSettledSequence(void);
 
 /**
  * UART integration hook supplied by the lower-computer project.
