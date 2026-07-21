@@ -282,7 +282,10 @@ static void Action_PlaceRough1(void)
         osDelay(100);
     }
 
-    Gimbal_SetAngle(0);
+    #ifdef USE_GIMBAL
+    /* 前往原料区途中将云台从内收位折到地图中间位。 */
+    Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
+    #endif
     SM_SendEvent(EVENT_ACTION_DONE);
 #else
     SM_SendEvent(EVENT_ACTION_DONE);
@@ -335,7 +338,10 @@ static void Action_PlaceTemp1(void)
         Gimbal_Extend(-m_ext);
         osDelay(100);
     }
-    Gimbal_SetAngle(0.0f);
+#ifdef USE_GIMBAL
+    /* 前往原料区途中将云台从内收位折到地图中间位。 */
+    Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
+#endif
     SM_SendEvent(EVENT_ACTION_DONE);
 #else
     SM_SendEvent(EVENT_ACTION_DONE);
@@ -391,7 +397,7 @@ static void Action_FetchRaw2(void)
 
     Gimbal_Extend(-PICKUP_EXTEND);
     osDelay(100);
-
+    
     SM_SendEvent(EVENT_ACTION_DONE);
 #else
     SM_SendEvent(EVENT_ACTION_DONE);
@@ -478,7 +484,10 @@ static void Action_PlaceRough2(void)
         osDelay(100);
     }
 
-    Gimbal_SetAngle(0.0f);
+#ifdef USE_GIMBAL
+    /* 前往原料区途中将云台从内收位折到地图中间位。 */
+    Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
+#endif
     SM_SendEvent(EVENT_ACTION_DONE);
 #else
     SM_SendEvent(EVENT_ACTION_DONE);
