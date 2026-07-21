@@ -2,19 +2,26 @@
 #define APP_CONFIG_H
 
 /* 启用状态机中的云台动作。 */
-#define CONFIG_USE_GIMBAL              0
+#define CONFIG_USE_GIMBAL              1
 
 /* 底盘控制：1=正常执行移动，0=状态机直接模拟到达并跳过移动。 */
 #define CONFIG_USE_CHASSIS                1
+
+/*
+ * 纯视觉微调测试模式：
+ * 1=不启动正常路线，直接根据合法 0x02 视觉帧微调底盘；
+ * 0=仅在状态机的 STATE_ADJUST_* 阶段接受偏差移动。
+ */
+#define CONFIG_VISION_ADJUST_ONLY         0
 
 /* 跳过取料时的颜色确认，并按颜色匹配成功继续动作。 */
 #define CONFIG_SKIP_COLOR_CONFIRM      1
 
 /* 跳过二维码物料顺序：1=使用默认顺序 {2, 3, 1} 直接继续，0=等待上位机下发。 */
-#define CONFIG_SKIP_QR                 0
+#define CONFIG_SKIP_QR                 1
 
-/* 跳过视觉微调：1=到位后直接继续，0=等待视觉反馈中的静态标志。 */
-#define CONFIG_SKIP_ADJUST             1
+/* 跳过视觉微调：1=到位后直接继续，0=等待 X/Y 偏差均稳定进入阈值。 */
+#define CONFIG_SKIP_ADJUST             0
 
 /*
  * UART7 TX/RX hardware loopback test.
@@ -70,32 +77,51 @@
 #define CONFIG_CHASSIS_HEADING_KD           0.0f
 #define CONFIG_CHASSIS_HEADING_DEAD_DEG     0.5f
 
-/* 6号升降电机行程（脉冲）：车体高度和底面/地图工位高度分别配置。 */
-#define CONFIG_GIMBAL_LIFT_CAR_PULSES      90000L
-#define CONFIG_GIMBAL_LIFT_GROUND_PULSES   0
+/* 视觉微调：X/Y 使用 PID 框架的纯 P 闭环，输入为归一化偏差。 */
+#define CONFIG_VISION_ADJUST_KP_X            1.0f
+#define CONFIG_VISION_ADJUST_KP_Y            -0.5f
+#define CONFIG_VISION_ADJUST_DEADZONE        5.0f
+#define CONFIG_VISION_ADJUST_RPM_LIMIT       15.0f
+#define CONFIG_VISION_ADJUST_YAW_RPM_LIMIT   10.0f
+#define CONFIG_VISION_ADJUST_PERIOD_MS       20U
+#define CONFIG_VISION_ADJUST_TIMEOUT_MS      200U
+#define CONFIG_VISION_ADJUST_X_STABLE_FRAMES 3U
+#define CONFIG_VISION_ADJUST_Y_STABLE_FRAMES 3U
+
+/* 6号升降电机的四档取放高度（相对顶部安全位的下降脉冲）。 */
+#define CONFIG_GIMBAL_LIFT_GROUND_PULSES     90000L
+#define CONFIG_GIMBAL_LIFT_CAR_PULSES        90000L
+#define CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES  90000L
+#define CONFIG_GIMBAL_LIFT_STACK_PULSES      90000L
+#define CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS     2000U
+#define CONFIG_GIMBAL_LIFT_CAR_WAIT_MS        1500U
+#define CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS  2000U
+#define CONFIG_GIMBAL_LIFT_STACK_WAIT_MS      2000U
+#define CONFIG_GIMBAL_ROTATE_WAIT_MS           4000U
+#define CONFIG_GIMBAL_GRIPPER_WAIT_MS          200U
 
 /*
  * 夹爪舵机 PWM：TIM1 已配置为 1 MHz 计数、20 ms 周期，因此 CCR 数值
  * 与高电平脉宽（us）相同。当前舵机有效行程为 0.5-2.5 ms。
  */
-#define CONFIG_GRIPPER_OPEN_PULSE_US        500U
-#define CONFIG_GRIPPER_CLOSE_PULSE_US       2500U
+#define CONFIG_GRIPPER_OPEN_PULSE_US        1400
+#define CONFIG_GRIPPER_CLOSE_PULSE_US       1100
 
 /*
  * 按键任务启动前的夹爪舵机测试：
  * 1=上电后先张开、再闭合；0=只初始化 PWM 并保持闭合。
  */
 #define CONFIG_GRIPPER_STARTUP_TEST          1
-#define CONFIG_GRIPPER_STARTUP_TEST_HOLD_MS  1000U
+#define CONFIG_GRIPPER_STARTUP_TEST_HOLD_MS  2000U
 
 /* 车体物料放置位置对应的云台角度（度）。 */
 #define CONFIG_CAR_MATERIAL_POS_1_DEG  -8.0f
-#define CONFIG_CAR_MATERIAL_POS_2_DEG  30.0f
-#define CONFIG_CAR_MATERIAL_POS_3_DEG  60.0f
+#define CONFIG_CAR_MATERIAL_POS_2_DEG  CONFIG_CAR_MATERIAL_POS_1_DEG-30.0f
+#define CONFIG_CAR_MATERIAL_POS_3_DEG  CONFIG_CAR_MATERIAL_POS_2_DEG-35.0f
 
 /* 地图物料放置位置对应的云台角度（度）。 */
 #define CONFIG_MAP_MATERIAL_POS_1_DEG  150
-#define CONFIG_MAP_MATERIAL_POS_2_DEG  -180
+#define CONFIG_MAP_MATERIAL_POS_2_DEG  90
 #define CONFIG_MAP_MATERIAL_POS_3_DEG  (-150.0f)
 
 /* 云台线缆保护：以当前电机零点为中心，只允许在单圈内运动。 */

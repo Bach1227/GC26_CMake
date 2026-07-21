@@ -3,6 +3,9 @@
 #include "bsp_zdt.h"
 #include "bsp_witgyro.h"
 #include "cmsis_os2.h"
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+#include "gimbal.h"
+#endif
 #include "PID.h"
 #include "queue.h"
 #include "timers.h"
@@ -31,9 +34,24 @@ TaskHandle_t ChassisTaskHandle = NULL;
 
 static volatile bool motion_active = false;
 static volatile bool motion_abort_requested = false;
+volatile bool g_chassis_adjust_heading_active = false;
+volatile float g_chassis_adjust_heading_deg = 0.0f;
+volatile ChassisVisionAxis_t g_chassis_adjust_axis =
+    CHASSIS_VISION_AXIS_IDLE;
+static volatile uint32_t adjust_heading_zero_generation = 0U;
 
 static PID_Param_float rotate_pid;
 static PID_Param_float heading_pid;
+static PID_Param_float vision_x_pid;
+static PID_Param_float vision_y_pid;
+
+static volatile int8_t vision_offset_x = 0;
+static volatile int8_t vision_offset_y = 0;
+static volatile uint32_t vision_feedback_tick = 0U;
+static volatile uint32_t vision_feedback_sequence = 0U;
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+static volatile bool vision_pickup_requested = false;
+#endif
 
 static volatile uint32_t dbg_cmd_sent = 0;
 static volatile uint32_t dbg_cmd_recv = 0;
@@ -313,6 +331,182 @@ static bool execute_translation(const ChassisMoveCmd_t *cmd)
     return completed;
 }
 
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+static void request_vision_pickup_once(void)
+{
+    bool should_request = false;
+
+    taskENTER_CRITICAL();
+    if (!vision_pickup_requested) {
+        vision_pickup_requested = true;
+        should_request = true;
+    }
+    taskEXIT_CRITICAL();
+
+    if (should_request) {
+        const GimbalCmd_t cmd = {
+            .type = GIMBAL_CMD_VISION_PICKUP,
+            .completion_event = EVENT_NONE,
+        };
+        (void)Gimbal_SendCmd(&cmd);
+    }
+}
+#endif
+
+static bool execute_vision_adjust(void)
+{
+    TickType_t last_wake = xTaskGetTickCount();
+    ChassisVisionAxis_t axis = CHASSIS_VISION_AXIS_X;
+    uint32_t last_feedback_sequence = 0U;
+    uint8_t stable_frames = 0U;
+    bool motors_running = false;
+    bool completed = false;
+
+    PID_Set_Kparam_float(&vision_x_pid,
+                         CONFIG_VISION_ADJUST_KP_X, 0.0f, 0.0f);
+    PID_Set_Kparam_float(&vision_y_pid,
+                         CONFIG_VISION_ADJUST_KP_Y, 0.0f, 0.0f);
+    PID_Set_Target_float(&vision_x_pid, 0.0f);
+    PID_Set_Target_float(&vision_y_pid, 0.0f);
+    PID_Set_ErrorDeadZone_float(&vision_x_pid,
+                                CONFIG_VISION_ADJUST_DEADZONE);
+    PID_Set_ErrorDeadZone_float(&vision_y_pid,
+                                CONFIG_VISION_ADJUST_DEADZONE);
+    PID_Set_OutputLimit_float(&vision_x_pid,
+                              CONFIG_VISION_ADJUST_RPM_LIMIT);
+    PID_Set_OutputLimit_float(&vision_y_pid,
+                              CONFIG_VISION_ADJUST_RPM_LIMIT);
+    PID_ClearUp_float(&vision_x_pid);
+    PID_ClearUp_float(&vision_y_pid);
+
+    PID_Set_Kparam_float(&heading_pid,
+                         CONFIG_CHASSIS_HEADING_KP,
+                         CONFIG_CHASSIS_HEADING_KI,
+                         CONFIG_CHASSIS_HEADING_KD);
+    PID_Set_Target_float(&heading_pid, g_chassis_adjust_heading_deg);
+    PID_Set_ErrorDeadZone_float(&heading_pid,
+                                CONFIG_CHASSIS_HEADING_DEAD_DEG);
+    PID_Set_OutputLimit_float(&heading_pid,
+                              CONFIG_VISION_ADJUST_YAW_RPM_LIMIT);
+    PID_ClearUp_float(&heading_pid);
+
+    motion_abort_requested = false;
+    motion_active = true;
+
+    while (g_chassis_adjust_heading_active &&
+           !motion_abort_requested) {
+        uint32_t now = HAL_GetTick();
+        uint32_t feedback_tick;
+        uint32_t feedback_sequence;
+        int8_t offset_x;
+        int8_t offset_y;
+        GyroSample_t gyro;
+
+        taskENTER_CRITICAL();
+        offset_x = vision_offset_x;
+        offset_y = vision_offset_y;
+        feedback_tick = vision_feedback_tick;
+        feedback_sequence = vision_feedback_sequence;
+        taskEXIT_CRITICAL();
+
+        if (feedback_tick != 0U &&
+            (uint32_t)(now - feedback_tick)
+                <= CONFIG_VISION_ADJUST_TIMEOUT_MS &&
+            gyro_get_sample(&gyro) &&
+            (uint32_t)(now - gyro.last_update_tick)
+                <= CONFIG_CHASSIS_GYRO_TIMEOUT_MS) {
+            float rpm_x = 0.0f;
+            float rpm_y = 0.0f;
+            float yaw_rpm;
+
+            if (feedback_sequence != last_feedback_sequence) {
+                last_feedback_sequence = feedback_sequence;
+
+                float active_offset =
+                    (axis == CHASSIS_VISION_AXIS_X)
+                    ? (float)offset_x
+                    : (float)offset_y;
+                bool error_in_threshold =
+                    (fabsf(active_offset)
+                     <= CONFIG_VISION_ADJUST_DEADZONE);
+
+                if (error_in_threshold) {
+                    if (stable_frames < UINT8_MAX) {
+                        ++stable_frames;
+                    }
+                } else {
+                    stable_frames = 0U;
+                }
+
+                if (axis == CHASSIS_VISION_AXIS_X) {
+                    if (stable_frames
+                        >= CONFIG_VISION_ADJUST_X_STABLE_FRAMES) {
+                        axis = CHASSIS_VISION_AXIS_Y;
+                        stable_frames = 0U;
+                        PID_ClearUp_float(&vision_x_pid);
+                        PID_ClearUp_float(&vision_y_pid);
+                        g_chassis_adjust_axis = axis;
+                    }
+                } else if (stable_frames
+                           >= CONFIG_VISION_ADJUST_Y_STABLE_FRAMES) {
+                    completed = true;
+                    taskENTER_CRITICAL();
+                    g_chassis_adjust_heading_active = false;
+                    g_chassis_adjust_axis =
+                        CHASSIS_VISION_AXIS_IDLE;
+                    taskEXIT_CRITICAL();
+                    break;
+                }
+            }
+
+            if (axis == CHASSIS_VISION_AXIS_X) {
+                rpm_x = -CONFIG_CHASSIS_X_DIRECTION
+                      * PID_Update_float(&vision_x_pid, (float)offset_x);
+            } else {
+                rpm_y = -CONFIG_CHASSIS_Y_DIRECTION
+                      * PID_Update_float(&vision_y_pid, (float)offset_y);
+            }
+
+            if (gyro.zero_generation != adjust_heading_zero_generation) {
+                taskENTER_CRITICAL();
+                g_chassis_adjust_heading_deg = gyro.angle;
+                adjust_heading_zero_generation = gyro.zero_generation;
+                taskEXIT_CRITICAL();
+                PID_Set_Target_float(&heading_pid, gyro.angle);
+                PID_ClearUp_float(&heading_pid);
+            }
+
+            yaw_rpm = PID_Update_float(&heading_pid, gyro.angle);
+            heading_pid.ValueLast = gyro.angle;
+            drive_translation(rpm_x, rpm_y, yaw_rpm);
+            motors_running = true;
+        } else if (motors_running) {
+            stop_all_motors();
+            motors_running = false;
+            PID_ClearUp_float(&vision_x_pid);
+            PID_ClearUp_float(&vision_y_pid);
+            PID_ClearUp_float(&heading_pid);
+        }
+
+        vTaskDelayUntil(&last_wake,
+                        pdMS_TO_TICKS(CONFIG_VISION_ADJUST_PERIOD_MS));
+    }
+
+    stop_all_motors();
+    PID_ClearUp_float(&vision_x_pid);
+    PID_ClearUp_float(&vision_y_pid);
+    PID_ClearUp_float(&heading_pid);
+    g_chassis_adjust_axis = CHASSIS_VISION_AXIS_IDLE;
+    motion_active = false;
+    motion_abort_requested = false;
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+    if (completed) {
+        request_vision_pickup_once();
+    }
+#endif
+    return completed;
+}
+
 static bool execute_rotation(const ChassisMoveCmd_t *cmd)
 {
     bool completed = false;
@@ -372,7 +566,13 @@ static bool execute_rotation(const ChassisMoveCmd_t *cmd)
 
 int Chassis_SendMoveCmd(int16_t x, int16_t y, Event_t completion_event)
 {
-    ChassisMoveCmd_t cmd = {x, y, 0, completion_event};
+    ChassisMoveCmd_t cmd = {
+        .x = x,
+        .y = y,
+        .rotation = 0,
+        .completion_event = completion_event,
+        .run_vision_adjust = false,
+    };
 
     if (chassis_queue == NULL) {
         return -1;
@@ -387,7 +587,13 @@ int Chassis_SendMoveCmd(int16_t x, int16_t y, Event_t completion_event)
 int Chassis_SendRotateCmd(float degrees, Event_t completion_event)
 {
     int16_t centidegree = (int16_t)(degrees * 100.0f);
-    ChassisMoveCmd_t cmd = {0, 0, centidegree, completion_event};
+    ChassisMoveCmd_t cmd = {
+        .x = 0,
+        .y = 0,
+        .rotation = centidegree,
+        .completion_event = completion_event,
+        .run_vision_adjust = false,
+    };
 
     if (chassis_queue == NULL) {
         return -1;
@@ -397,6 +603,84 @@ int Chassis_SendRotateCmd(float degrees, Event_t completion_event)
         return 0;
     }
     return -1;
+}
+
+bool Chassis_BeginVisionAdjust(void)
+{
+    GyroSample_t gyro;
+    ChassisMoveCmd_t cmd = {
+        .x = 0,
+        .y = 0,
+        .rotation = 0,
+#if CONFIG_VISION_ADJUST_ONLY
+        .completion_event = EVENT_NONE,
+#else
+        .completion_event = EVENT_ADJUST_DONE,
+#endif
+        .run_vision_adjust = true,
+    };
+
+    if (chassis_queue == NULL ||
+        !gyro_get_sample(&gyro) ||
+        (uint32_t)(HAL_GetTick() - gyro.last_update_tick)
+            > CONFIG_CHASSIS_GYRO_TIMEOUT_MS) {
+        g_chassis_adjust_heading_active = false;
+        return false;
+    }
+
+    taskENTER_CRITICAL();
+    g_chassis_adjust_heading_deg = gyro.angle;
+    adjust_heading_zero_generation = gyro.zero_generation;
+    vision_offset_x = 0;
+    vision_offset_y = 0;
+    vision_feedback_tick = 0U;
+    vision_feedback_sequence = 0U;
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+    vision_pickup_requested = false;
+#endif
+    g_chassis_adjust_axis = CHASSIS_VISION_AXIS_X;
+    g_chassis_adjust_heading_active = true;
+    taskEXIT_CRITICAL();
+
+    if (xQueueSend(chassis_queue, &cmd, 0) != pdPASS) {
+        g_chassis_adjust_heading_active = false;
+        return false;
+    }
+    return true;
+}
+
+void Chassis_UpdateVisionAdjust(int8_t offset_x, int8_t offset_y)
+{
+    taskENTER_CRITICAL();
+    vision_offset_x = offset_x;
+    vision_offset_y = offset_y;
+    vision_feedback_tick = HAL_GetTick();
+    ++vision_feedback_sequence;
+    taskEXIT_CRITICAL();
+}
+
+void Chassis_EndVisionAdjust(void)
+{
+    bool was_active;
+
+    taskENTER_CRITICAL();
+    was_active = g_chassis_adjust_heading_active;
+    g_chassis_adjust_heading_active = false;
+    g_chassis_adjust_axis = CHASSIS_VISION_AXIS_IDLE;
+    taskEXIT_CRITICAL();
+
+    if (chassis_queue != NULL) {
+        (void)xQueueReset(chassis_queue);
+    }
+    Chassis_Stop();
+
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+    if (was_active) {
+        request_vision_pickup_once();
+    }
+#else
+    (void)was_active;
+#endif
 }
 
 void Chassis_Task(void *argument)
@@ -427,7 +711,9 @@ void Chassis_Task(void *argument)
         }
         dbg_cmd_recv++;
 
-        if (cmd.x == 0 && cmd.y == 0 && cmd.rotation != 0) {
+        if (cmd.run_vision_adjust) {
+            completed = execute_vision_adjust();
+        } else if (cmd.x == 0 && cmd.y == 0 && cmd.rotation != 0) {
             completed = execute_rotation(&cmd);
         } else {
             completed = execute_translation(&cmd);

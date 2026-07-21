@@ -130,9 +130,9 @@ void MX_FREERTOS_Init(void) {
    */
   Gimbal_GripperInit();
 #if CONFIG_GRIPPER_STARTUP_TEST
-Gimbal_Gripper(500);
+Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US);
 HAL_Delay(CONFIG_GRIPPER_STARTUP_TEST_HOLD_MS);
-Gimbal_Gripper(2500);
+Gimbal_Gripper(CONFIG_GRIPPER_CLOSE_PULSE_US);
 HAL_Delay(CONFIG_GRIPPER_STARTUP_TEST_HOLD_MS);
 #endif
 #endif

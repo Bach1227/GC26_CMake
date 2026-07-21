@@ -9,6 +9,7 @@
 
 #include "interrupthandle.h"
 #include "comm_manager.h"
+#include "config.h"
 #include "usart.h"
 #include "tim.h"
 #include "fdcan.h"
@@ -52,7 +53,6 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
   if (huart == &COMM_UART_HANDLE)
   {
-
     Comm_OnUartRx(Size);
   }
 
@@ -64,7 +64,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 
 }
 
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) 
 {
   if (huart->Instance == COMM_UART_INSTANCE) // 替换为你实际使用的串口
     {

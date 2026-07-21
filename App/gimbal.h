@@ -41,6 +41,7 @@ void Gimbal_InitTask(void);
 /** 复合命令类型 */
 typedef enum {
     GIMBAL_CMD_FETCH_RAW,     /* 完整取料序列 (3次颜色等待+夹取+放车身) */
+    GIMBAL_CMD_VISION_PICKUP, /* 视觉对准后下降、夹取并升回 */
     GIMBAL_CMD_PLACE_ROUGH,   /* 完整粗加工放置序列 (取→放→取回) */
     GIMBAL_CMD_PLACE_TEMP,    /* 完整暂存区放置序列 (取→放, 不回取) */
     GIMBAL_CMD_STACK_TEMP,    /* 完整暂存区码垛序列 */

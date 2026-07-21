@@ -29,7 +29,7 @@ typedef struct {
     uint8_t color;       /* 0=未识别，1=红，2=绿，3=蓝 */
     int8_t  offset_x;    /* X 归一化偏差，右正，范围 -127~127 */
     int8_t  offset_y;    /* Y 归一化偏差，下正，范围 -127~127 */
-    uint8_t is_static;   /* 0=运动中，1=静止 */
+    uint8_t is_static;   /* 0=仅保存不闭环，1=该帧参与视觉闭环 */
 } ProtocolVisionFeedback_t;
 
 _Static_assert(sizeof(ProtocolVisionFeedback_t) == 4u,

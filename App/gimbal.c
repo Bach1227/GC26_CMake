@@ -26,8 +26,8 @@ extern uint8_t seq[2][3];
 #define ANGLE_TARGET_DEFAULT CONFIG_CAR_MATERIAL_POS_1_DEG      /* 默认目标 180° */
 
 /* PID (角度° → 速度) */
-#define PID_Kp              0.025f
-#define PID_Ki              0.001f
+#define PID_Kp              0.028f
+#define PID_Ki              0.0010f
 #define PID_Kd              0.0f
 #define SPEED_LIMIT         6.0f          /* 输出上限 */
 #define INTEGRAL_RANGE      30.0f         /* ° */
@@ -278,8 +278,8 @@ static float fetch_car_angle(uint8_t pos)
 {
     float deg;
     if (pos == 1)      deg = CONFIG_CAR_MATERIAL_POS_1_DEG;
-    else if (pos == 2) deg = CONFIG_CAR_MATERIAL_POS_1_DEG-30;
-    else               deg = CONFIG_CAR_MATERIAL_POS_1_DEG-30-35;
+    else if (pos == 2) deg = CONFIG_CAR_MATERIAL_POS_2_DEG;
+    else               deg = CONFIG_CAR_MATERIAL_POS_3_DEG;
     if (deg > 180.0f) deg -= 360.0f;
     return deg;
 }
@@ -293,30 +293,37 @@ static void ExecFetchRaw(Event_t done_event)
 
     // Gimbal_Extend(5000);
     // osDelay(100);
-
+    float folded_angle = CONFIG_MAP_MATERIAL_POS_2_DEG;
+    Gimbal_SetAngle(folded_angle);
+    osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
+    Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US);
+    osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
     for (int i = 0; i < 3; i++)
     {
         // if (wait_expected_color(seq[0][i]))
         // {
-        //     Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES); osDelay(2000);
-            Gimbal_Gripper(CONFIG_GRIPPER_CLOSE_PULSE_US); osDelay(200);
-        //     Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES); osDelay(2000);
+            Gimbal_Lift(-CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
+            osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
+            Gimbal_Gripper(CONFIG_GRIPPER_CLOSE_PULSE_US);
+            osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
+            Gimbal_Lift(CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
+            osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
         // }
 
         float angle = fetch_car_angle(seq[0][i]);
         Gimbal_SetAngle(angle);
-        while (fabsf(Gimbal_GetAngle() - angle) > 1.0f) osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
-        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES); osDelay(1500);
-        Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US); osDelay(200);
-        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES); osDelay(1500);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
+        Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US);
+        osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
 
-        Gimbal_Extend(2000); osDelay(2000);
-        Gimbal_Extend(-2000); osDelay(2000);
-        // float folded_angle = CONFIG_MAP_MATERIAL_POS_2_DEG;
-        // Gimbal_SetAngle(folded_angle);
-        // while (fabsf(Gimbal_GetAngle() - folded_angle) > 1.0f) osDelay(10);
-        // osDelay(1000);
+        float folded_angle = CONFIG_MAP_MATERIAL_POS_2_DEG;
+        Gimbal_SetAngle(folded_angle);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
     }
 
     // Gimbal_Extend(-FETCH_PICKUP_EXTEND);
@@ -324,7 +331,53 @@ static void ExecFetchRaw(Event_t done_event)
 
 
 
-    SM_SendEvent(EVENT_NONE);
+    if (done_event != EVENT_NONE) {
+        SM_SendEvent(done_event);
+    }
+}
+
+static void ExecVisionPickup(Event_t done_event)
+{
+    uint8_t color = g_vision_feedback.color;
+    if (color < 1U || color > 3U) {
+        return;
+    }
+
+    if (CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES != 0) {
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
+    }
+
+    Gimbal_Gripper(CONFIG_GRIPPER_CLOSE_PULSE_US);
+    osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
+
+    if (CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES != 0) {
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
+    }
+
+    float car_target = fetch_car_angle(color);
+    Gimbal_SetAngle(car_target);
+    osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
+
+    if (CONFIG_GIMBAL_LIFT_CAR_PULSES != 0) {
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
+    }
+
+    Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US);
+    osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
+
+    if (CONFIG_GIMBAL_LIFT_CAR_PULSES != 0) {
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
+    }
+
+    Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
+
+    if (done_event != EVENT_NONE) {
+        SM_SendEvent(done_event);
+    }
 }
 
 /* ====================================================================== */
@@ -345,6 +398,9 @@ void Gimbal_CmdTask(void *argument)
         switch (cmd.type) {
         case GIMBAL_CMD_FETCH_RAW:
             ExecFetchRaw(cmd.completion_event);
+            break;
+        case GIMBAL_CMD_VISION_PICKUP:
+            ExecVisionPickup(cmd.completion_event);
             break;
         case GIMBAL_CMD_PLACE_ROUGH:
         case GIMBAL_CMD_PLACE_TEMP:

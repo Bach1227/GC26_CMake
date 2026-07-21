@@ -35,6 +35,16 @@ volatile ProtocolVisionFeedback_t g_vision_feedback = {
     .is_static = 0u,
 };
 
+#if CONFIG_VISION_ADJUST_ONLY && CONFIG_USE_CHASSIS
+/*
+ * Pure vision mode is a single adjustment session. Once a session has
+ * started, later vision motion (for example, moving the material after
+ * alignment) must not start the chassis again.
+ */
+static bool pure_vision_adjust_started = false;
+#endif
+
+#if !CONFIG_VISION_ADJUST_ONLY
 static bool is_adjust_state(State_t state)
 {
     return state == STATE_ADJUST_RAW_1 ||
@@ -44,6 +54,7 @@ static bool is_adjust_state(State_t state)
            state == STATE_ADJUST_ROUGH_2 ||
            state == STATE_ADJUST_TEMP_2;
 }
+#endif
 
 static bool valid_material_sequence(const uint8_t order[3])
 {
@@ -117,19 +128,35 @@ static void dispatch_frame(uint8_t command, const uint8_t *payload,
             g_vision_feedback.is_static = feedback.is_static;
             SM_SetCurrentColor(feedback.color);
 
+#if !CONFIG_VISION_ADJUST_ONLY
             if (!is_adjust_state(SM_GetState())) {
                 break;
             }
+#endif
 
-            if (feedback.is_static != 0u) {
-                (void)SM_SendEvent(EVENT_ADJUST_DONE);
+            /*
+             * is_static only gates whether this sample participates in the
+             * control loop. Completion is determined exclusively by the
+             * X/Y error thresholds in ChassisControl.
+             */
+            if (feedback.is_static == 0u) {
                 break;
             }
 
 #if CONFIG_USE_CHASSIS
-            (void)Chassis_SendMoveCmd((int16_t)feedback.offset_x,
-                                      (int16_t)feedback.offset_y,
-                                      EVENT_NONE);
+#if CONFIG_VISION_ADJUST_ONLY
+            if (!g_chassis_adjust_heading_active) {
+                if (pure_vision_adjust_started ||
+                    !Chassis_BeginVisionAdjust()) {
+                    break;
+                }
+                pure_vision_adjust_started = true;
+            }
+#endif
+            if (g_chassis_adjust_heading_active) {
+                Chassis_UpdateVisionAdjust(feedback.offset_x,
+                                           feedback.offset_y);
+            }
 #else
             (void)feedback.offset_x;
             (void)feedback.offset_y;

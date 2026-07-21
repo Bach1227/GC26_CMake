@@ -98,7 +98,13 @@ static void Action_Nop(void)
 
 static void Action_EnterAdjust(void)
 {
+#if CONFIG_USE_CHASSIS
+    (void)Chassis_BeginVisionAdjust();
+#endif
 #if CONFIG_SKIP_ADJUST
+#if CONFIG_USE_CHASSIS
+    Chassis_EndVisionAdjust();
+#endif
     SM_SendEvent(EVENT_ADJUST_DONE);
 #endif
 }
@@ -207,35 +213,33 @@ static void Action_PlaceRough1(void)
         /* 从车身对应角度取料 */
         float c_angle = car_angle(seq[0][i]);
         Gimbal_SetAngle(c_angle);
-        while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gripper_Close();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
 
         /* 转到工位对应角度放置 */
         float m_angle = map_angle(seq[0][i]);
         Gimbal_SetAngle(m_angle);
-        while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         int32_t m_ext = map_extend(seq[0][i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gripper_Open();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gimbal_Extend(-m_ext);
         osDelay(100);
     }
@@ -246,35 +250,33 @@ static void Action_PlaceRough1(void)
         /* 转到工位对应角度取料 */
         float m_angle = map_angle(seq[0][i]);
         Gimbal_SetAngle(m_angle);
-        while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         int32_t m_ext = map_extend(seq[0][i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gripper_Close();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gimbal_Extend(-m_ext);
         osDelay(100);
 
         /* 去车身对应角度放料 */
         float c_angle = car_angle(seq[0][i]);
         Gimbal_SetAngle(c_angle);
-        while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gripper_Open();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
     }
@@ -288,8 +290,8 @@ static void Action_PlaceRough1(void)
 
 static void Action_MoveToTemp1(void)
 {
-    SM_ChassisMove(1000, 0, EVENT_NONE);
-    SM_ChassisMove(0, -1000, EVENT_ARRIVED);
+    SM_ChassisMove(-1000, 0, EVENT_NONE);
+    SM_ChassisMove(0, 1000, EVENT_ARRIVED);
 }
 
 static void Action_PlaceTemp1(void)
@@ -301,35 +303,33 @@ static void Action_PlaceTemp1(void)
         /* 从车身对应角度取料 */
         float c_angle = car_angle(seq[0][i]);
         Gimbal_SetAngle(c_angle);
-        while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gripper_Close();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
 
         /* 转到暂存区对应角度放置 */
         float m_angle = map_angle(seq[0][i]);
         Gimbal_SetAngle(m_angle);
-        while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         int32_t m_ext = map_extend(seq[0][i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gripper_Open();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gimbal_Extend(-m_ext);
         osDelay(100);
     }
@@ -359,33 +359,31 @@ static void Action_FetchRaw2(void)
     {
         if (wait_expected_color(seq[1][i]))
         {
-            Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-            osDelay(100);
+            Gimbal_Lift(-CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
+            osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
             Gripper_Close();
             osDelay(200);
-            Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-            osDelay(100);
+            Gimbal_Lift(CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES);
+            osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
         }
 
         Gimbal_Extend(-EXTEND_DIFF);
         osDelay(100);
         float angle = car_angle(seq[1][i]);
         Gimbal_SetAngle(angle);
-        while (fabsf(Gimbal_GetAngle() - angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gripper_Open();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
 
         Gimbal_Extend(EXTEND_DIFF);
         osDelay(100);
         Gimbal_SetAngle(0.0f);
-        while (fabsf(Gimbal_GetAngle()) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
     }
 
     Gimbal_Extend(-PICKUP_EXTEND);
@@ -411,34 +409,32 @@ static void Action_PlaceRough2(void)
     {
         float c_angle = car_angle(seq[1][i]);
         Gimbal_SetAngle(c_angle);
-        while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gripper_Close();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
 
         float m_angle = map_angle(seq[1][i]);
         Gimbal_SetAngle(m_angle);
-        while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         int32_t m_ext = map_extend(seq[1][i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gripper_Open();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gimbal_Extend(-m_ext);
         osDelay(100);
     }
@@ -448,34 +444,32 @@ static void Action_PlaceRough2(void)
     {
         float m_angle = map_angle(seq[1][i]);
         Gimbal_SetAngle(m_angle);
-        while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         int32_t m_ext = map_extend(seq[1][i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gripper_Close();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gimbal_Extend(-m_ext);
         osDelay(100);
 
         float c_angle = car_angle(seq[1][i]);
         Gimbal_SetAngle(c_angle);
-        while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gripper_Open();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
     }
@@ -501,34 +495,32 @@ static void Action_StackTemp2(void)
     {
         float c_angle = car_angle(seq[1][i]);
         Gimbal_SetAngle(c_angle);
-        while (fabsf(Gimbal_GetAngle() - c_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         Gimbal_Extend(CAR_EXTEND);
         osDelay(100);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gripper_Close();
         osDelay(200);
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
-        osDelay(100);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gimbal_Extend(-CAR_EXTEND);
         osDelay(100);
 
         float m_angle = map_angle(seq[1][i]);
         Gimbal_SetAngle(m_angle);
-        while (fabsf(Gimbal_GetAngle() - m_angle) > 1.0f)
-            osDelay(10);
+        osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         int32_t m_ext = map_extend(seq[1][i]);
         Gimbal_Extend(m_ext);
         osDelay(100);
-        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        Gimbal_Lift(-CONFIG_GIMBAL_LIFT_STACK_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_STACK_WAIT_MS);
         Gripper_Open();
         osDelay(200);
-        Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
-        osDelay(100);
+        Gimbal_Lift(CONFIG_GIMBAL_LIFT_STACK_PULSES);
+        osDelay(CONFIG_GIMBAL_LIFT_STACK_WAIT_MS);
         Gimbal_Extend(-m_ext);
         osDelay(100);
     }
