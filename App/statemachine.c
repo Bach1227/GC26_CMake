@@ -147,7 +147,7 @@ static void Action_Start(void)
     /* 临时测试：原有平移动作。 */
     SM_ChassisMove(0, 410, EVENT_NONE);        /* 先沿 Y 轴到中间点 */
     // SM_ChassisMove(500, 0, EVENT_NONE);        /* 再沿 X 轴到中间点 */
-    SM_ChassisMove(870, 000, EVENT_ARRIVED);     /* 到 QR 位 */
+    SM_ChassisMove(840, 000, EVENT_ARRIVED);     /* 到 QR 位 */
 
     /* 航向角闭环测试：相对陀螺仪软件零点转到 +90°。 */
     // Chassis_SendRotateCmd(90.0f, EVENT_NONE);
@@ -215,7 +215,7 @@ static void Action_MoveToRaw1(void)
         Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
     #endif
     SM_ChassisRotate(CONFIG_CHASSIS_RAW_HEADING_DEG, EVENT_NONE);
-    SM_ChassisMove(1050, 0, EVENT_ARRIVED);
+    SM_ChassisMove(1080, 0, EVENT_ARRIVED);
 }
 
 static void FetchRawToCar(void)
@@ -260,7 +260,9 @@ static void FetchRawToCar(void)
         Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
         osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
     }
-
+    
+    Gimbal_Extend(CONFIG_GIMBAL_CAR_RETRACT_PULSES);
+    osDelay(1000);
     SM_SendEvent(EVENT_ACTION_DONE);
 #else
     SM_SendEvent(EVENT_ACTION_DONE);
@@ -292,7 +294,7 @@ static void Action_PlaceRough1(void)
         osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
         Gimbal_Extend(-CONFIG_GIMBAL_CAR_RETRACT_PULSES);
-        osDelay(100);
+        osDelay(1000);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gripper_Close();
@@ -300,7 +302,7 @@ static void Action_PlaceRough1(void)
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
         Gimbal_Extend(CONFIG_GIMBAL_CAR_RETRACT_PULSES);
-        osDelay(100);
+        osDelay(1000);
 
         /* 转到工位对应角度放置 */
         float m_angle = map_angle(seq[0][i]);
@@ -309,7 +311,7 @@ static void Action_PlaceRough1(void)
 
         int32_t m_ext = map_extend(seq[0][i]);
         Gimbal_Extend(m_ext);
-        osDelay(100);
+        osDelay(1000);
         Gimbal_Lift(-CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gripper_Open();
@@ -317,7 +319,7 @@ static void Action_PlaceRough1(void)
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_GROUND_PULSES);
         osDelay(CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS);
         Gimbal_Extend(-m_ext);
-        osDelay(100);
+        osDelay(1000);
     }
 
     /* 取回: 从工位取 → 放回车身 */
