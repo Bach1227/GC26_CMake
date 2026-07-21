@@ -155,9 +155,9 @@ static void Action_EnterAdjust(void)
 static void Action_Start(void)
 {
     /* 临时测试：原有平移动作。 */
-    SM_ChassisMove(0, 410, EVENT_NONE);        /* 先沿 Y 轴到中间点 */
+    SM_ChassisMove(0, 430, EVENT_NONE);        /* 先沿 Y 轴到中间点 */
     // SM_ChassisMove(500, 0, EVENT_NONE);        /* 再沿 X 轴到中间点 */
-    SM_ChassisMove(840, 000, EVENT_ARRIVED);     /* 到 QR 位 */
+    SM_ChassisMove(800, 000, EVENT_ARRIVED);     /* 到 QR 位 */
 
     /* 航向角闭环测试：相对陀螺仪软件零点转到 +90°。 */
     // Chassis_SendRotateCmd(90.0f, EVENT_NONE);
@@ -225,7 +225,7 @@ static void Action_MoveToRaw1(void)
         Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
     #endif
     SM_ChassisRotate(CONFIG_CHASSIS_RAW_HEADING_DEG, EVENT_NONE);
-    SM_ChassisMove(1080, 0, EVENT_ARRIVED);
+    SM_ChassisMove(1120, 0, EVENT_ARRIVED);
 }
 
 static void FetchRawToCar(void)
@@ -286,7 +286,7 @@ static void Action_FetchRaw1(void)
 
 static void Action_MoveToRough1(void)
 {
-    SM_ChassisMove(-550, 0, EVENT_NONE);        /* 左移到主干道 */
+    SM_ChassisMove(-600, 0, EVENT_NONE);        /* 左移到主干道 */
     SM_ChassisRotate(CONFIG_CHASSIS_ROUGH_HEADING_DEG, EVENT_NONE); /* 陀螺仪闭环 */
     SM_ChassisMove(0, -2050, EVENT_ARRIVED);      /* 直行到粗加工区 */
 }
@@ -445,7 +445,7 @@ static void Action_FetchRaw2(void)
 
 static void Action_MoveToRough2(void)
 {
-    SM_ChassisMove(-550, 0, EVENT_NONE);        /* 左移到主干道 */
+    SM_ChassisMove(-600, 0, EVENT_NONE);        /* 左移到主干道 */
     SM_ChassisRotate(CONFIG_CHASSIS_ROUGH_HEADING_DEG, EVENT_NONE); /* 陀螺仪闭环 */
     SM_ChassisMove(0, -2050, EVENT_ARRIVED);      /* 直行到粗加工区 */
 }
