@@ -369,10 +369,9 @@ static void Action_PlaceRough1(void)
     /* 前往原料区途中将云台从内收位折到地图中间位。 */
     Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
     #endif
-    SM_SendEvent(EVENT_ACTION_DONE);
-#else
-    SM_SendEvent(EVENT_ACTION_DONE);
+
 #endif
+    SM_SendEvent(EVENT_ACTION_DONE);
 }
 
 static void Action_MoveToTemp1(void)
