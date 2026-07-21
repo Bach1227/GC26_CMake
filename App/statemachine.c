@@ -205,17 +205,17 @@ static void Action_MoveToRaw1(void)
     sm_material_sequence_event_sent = false;
     taskEXIT_CRITICAL();
 
+    #if defined(USE_GIMBAL)
+        /* 前往原料区途中将云台从内收位折到地图中间位。 */
+        Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
+        Gimbal_Lift(-20000);
+        osDelay(2);
+        Gimbal_Extend(CONFIG_GIMBAL_MAP_EXTEND_POS_2_PULSES);
+        osDelay(2);
+        osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
+    #endif
     SM_ChassisRotate(CONFIG_CHASSIS_RAW_HEADING_DEG, EVENT_NONE);
     SM_ChassisMove(1150, 0, EVENT_ARRIVED);
-#if defined(USE_GIMBAL)
-    /* 前往原料区途中将云台从内收位折到地图中间位。 */
-    Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
-    Gimbal_Lift(-20000);
-    osDelay(2);
-    Gimbal_Extend(CONFIG_GIMBAL_MAP_EXTEND_POS_2_PULSES);
-    osDelay(2);
-    osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
-#endif
 }
 
 static void Action_FetchRaw1(void)
