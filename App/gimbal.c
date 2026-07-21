@@ -294,7 +294,7 @@ static void ExecVisionPickup(Event_t done_event)
     }
 
     Gimbal_Extend(-CONFIG_GIMBAL_CAR_RETRACT_PULSES);
-    osDelay(100);
+    osDelay(CONFIG_GIMBAL_EXTEND_CAR_WAIT_MS);
 
     float car_target = fetch_car_angle(color);
     Gimbal_SetAngle(car_target);
@@ -314,7 +314,7 @@ static void ExecVisionPickup(Event_t done_event)
     }
 
     Gimbal_Extend(CONFIG_GIMBAL_CAR_RETRACT_PULSES);
-    osDelay(100);
+    osDelay(CONFIG_GIMBAL_EXTEND_CAR_WAIT_MS);
     Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
 
     if (done_event != EVENT_NONE) {

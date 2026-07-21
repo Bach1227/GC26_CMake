@@ -535,7 +535,10 @@ static bool execute_vision_adjust(void)
             drive_translation(rpm_x, rpm_y, yaw_rpm);
             motors_running = true;
         } else {
-            stable_timing = false;
+            /*
+             * 视觉暂时丢失时只停止底盘，保留已经开始的稳定计时。
+             * 稳定计时只由新的超阈值视觉数据清除。
+             */
             if (motors_running) {
                 stop_all_motors();
                 motors_running = false;
