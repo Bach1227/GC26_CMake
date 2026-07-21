@@ -181,7 +181,7 @@ static void Action_MoveToRaw1(void)
     taskEXIT_CRITICAL();
 
     SM_ChassisMove(1150, 0, EVENT_ARRIVED);
-#ifdef USE_GIMBAL
+#if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
     /* 前往原料区途中将云台从内收位折到地图中间位。 */
     Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
 #endif
@@ -189,7 +189,7 @@ static void Action_MoveToRaw1(void)
 
 static void Action_FetchRaw1(void)
 {
-#ifdef USE_GIMBAL
+#if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
     GimbalCmd_t cmd = {GIMBAL_CMD_FETCH_RAW, EVENT_ACTION_DONE};
     Gimbal_SendCmd(&cmd);
 #else
@@ -206,7 +206,7 @@ static void Action_MoveToRough1(void)
 
 static void Action_PlaceRough1(void)
 {
-#ifdef USE_GIMBAL
+#if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
     /* 从车身取料 → 放到粗加工区 */
     for (int i = 0; i < 3; i++)
     {
@@ -298,7 +298,7 @@ static void Action_MoveToTemp1(void)
 
 static void Action_PlaceTemp1(void)
 {
-#ifdef USE_GIMBAL
+#if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
     /* 从车身取料 → 放到暂存区 (不回取) */
     for (int i = 0; i < 3; i++)
     {
@@ -353,7 +353,7 @@ static void Action_MoveToRaw2(void)
 
 static void Action_FetchRaw2(void)
 {
-#ifdef USE_GIMBAL
+#if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
     /* 同第一批: 伸出→等颜色→夹取→转放料位→释放→归零 */
     Gimbal_Extend(PICKUP_EXTEND);
     osDelay(100);
@@ -407,7 +407,7 @@ static void Action_MoveToRough2(void)
 
 static void Action_PlaceRough2(void)
 {
-#ifdef USE_GIMBAL
+#if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
     /* 从车身取料 → 放到粗加工区 */
     for (int i = 0; i < 3; i++)
     {
@@ -494,7 +494,7 @@ static void Action_MoveToTemp2(void)
 
 static void Action_StackTemp2(void)
 {
-#ifdef USE_GIMBAL
+#if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
     /* 从车身取料 → 放到暂存区码垛 (不回取) */
     for (int i = 0; i < 3; i++)
     {

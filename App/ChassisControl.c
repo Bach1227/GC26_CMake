@@ -3,7 +3,7 @@
 #include "bsp_zdt.h"
 #include "bsp_witgyro.h"
 #include "cmsis_os2.h"
-#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY && CONFIG_ENABLE_MATERIAL_PLACEMENT
 #include "gimbal.h"
 #endif
 #include "PID.h"
@@ -49,7 +49,7 @@ static volatile int8_t vision_offset_x = 0;
 static volatile int8_t vision_offset_y = 0;
 static volatile uint32_t vision_feedback_tick = 0U;
 static volatile uint32_t vision_feedback_sequence = 0U;
-#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY && CONFIG_ENABLE_MATERIAL_PLACEMENT
 static volatile bool vision_pickup_requested = false;
 #endif
 
@@ -331,7 +331,7 @@ static bool execute_translation(const ChassisMoveCmd_t *cmd)
     return completed;
 }
 
-#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY && CONFIG_ENABLE_MATERIAL_PLACEMENT
 static void request_vision_pickup_once(void)
 {
     bool should_request = false;
@@ -499,7 +499,7 @@ static bool execute_vision_adjust(void)
     g_chassis_adjust_axis = CHASSIS_VISION_AXIS_IDLE;
     motion_active = false;
     motion_abort_requested = false;
-#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY && CONFIG_ENABLE_MATERIAL_PLACEMENT
     if (completed) {
         request_vision_pickup_once();
     }
@@ -635,7 +635,7 @@ bool Chassis_BeginVisionAdjust(void)
     vision_offset_y = 0;
     vision_feedback_tick = 0U;
     vision_feedback_sequence = 0U;
-#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY && CONFIG_ENABLE_MATERIAL_PLACEMENT
     vision_pickup_requested = false;
 #endif
     g_chassis_adjust_axis = CHASSIS_VISION_AXIS_X;
@@ -674,7 +674,7 @@ void Chassis_EndVisionAdjust(void)
     }
     Chassis_Stop();
 
-#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY
+#if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY && CONFIG_ENABLE_MATERIAL_PLACEMENT
     if (was_active) {
         request_vision_pickup_once();
     }

@@ -4,6 +4,9 @@
 /* 启用状态机中的云台动作。 */
 #define CONFIG_USE_GIMBAL              0
 
+/* 是否执行物料取放：1=执行车体/地图取放与码垛，0=跳过并继续状态机。 */
+#define CONFIG_ENABLE_MATERIAL_PLACEMENT  1
+
 /* 底盘控制：1=正常执行移动，0=状态机直接模拟到达并跳过移动。 */
 #define CONFIG_USE_CHASSIS                1
 
