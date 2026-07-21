@@ -5,7 +5,7 @@
 #define CONFIG_USE_GIMBAL              1
 
 /* 是否执行物料取放：1=执行车体/地图取放与码垛，0=跳过并继续状态机。 */
-#define CONFIG_ENABLE_MATERIAL_PLACEMENT  1
+#define CONFIG_ENABLE_MATERIAL_PLACEMENT  0
 
 /* 底盘控制：1=正常执行移动，0=状态机直接模拟到达并跳过移动。 */
 #define CONFIG_USE_CHASSIS                1
@@ -109,9 +109,9 @@
  * 伸展电机到地图工位的相对脉冲。
  * 地面取放和码垛共用，每个位置可独立调整。
  */
-#define CONFIG_GIMBAL_MAP_EXTEND_POS_1_PULSES  400L
-#define CONFIG_GIMBAL_MAP_EXTEND_POS_2_PULSES  200L
-#define CONFIG_GIMBAL_MAP_EXTEND_POS_3_PULSES  400L
+#define CONFIG_GIMBAL_MAP_EXTEND_POS_1_PULSES  -2000L
+#define CONFIG_GIMBAL_MAP_EXTEND_POS_2_PULSES  -1000L
+#define CONFIG_GIMBAL_MAP_EXTEND_POS_3_PULSES  -2000L
 
 /*
  * 夹爪舵机 PWM：TIM1 已配置为 1 MHz 计数、20 ms 周期，因此 CCR 数值

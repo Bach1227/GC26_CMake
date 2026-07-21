@@ -191,9 +191,10 @@ static void Action_MoveToRaw1(void)
     taskEXIT_CRITICAL();
 
     SM_ChassisMove(1150, 0, EVENT_ARRIVED);
-#if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
+#if defined(USE_GIMBAL)
     /* 前往原料区途中将云台从内收位折到地图中间位。 */
     Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
+    Gimbal_Extend(CONFIG_GIMBAL_MAP_EXTEND_POS_2_PULSES);
 #endif
 }
 
@@ -209,7 +210,7 @@ static void Action_FetchRaw1(void)
 
 static void Action_MoveToRough1(void)
 {
-    SM_ChassisMove(-650, 0, EVENT_NONE);        /* 左移到主干道 */
+    SM_ChassisMove(-600, 0, EVENT_NONE);        /* 左移到主干道 */
     Chassis_SendRotateCmd(180.0f, EVENT_NONE);         /* 逆时针转180° (陀螺仪闭环) */
     SM_ChassisMove(0, -2050, EVENT_ARRIVED);      /* 直行到粗加工区 */
 }
@@ -416,7 +417,7 @@ static void Action_FetchRaw2(void)
 
 static void Action_MoveToRough2(void)
 {
-    SM_ChassisMove(-650, 0, EVENT_NONE);        /* 左移到主干道 */
+    SM_ChassisMove(-600, 0, EVENT_NONE);        /* 左移到主干道 */
     Chassis_SendRotateCmd(180.0f, EVENT_NONE);         /* 逆时针转180° (陀螺仪闭环) */
     SM_ChassisMove(0, -2050, EVENT_ARRIVED);      /* 直行到粗加工区 */
 }
