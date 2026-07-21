@@ -168,12 +168,17 @@ static void dispatch_frame(uint8_t command, const uint8_t *payload,
                 .is_static = payload[3],
             };
 
-            update_material_motion_state(feedback.is_static);
+            /*
+             * 先发布本帧颜色，再发布“动后静止”序号。
+             * Raw 状态机看到新序号时，必须已经能读到后一个到位物料的颜色，
+             * 不能仍使用运动前的旧颜色决定车体槽位。
+             */
             g_vision_feedback.color = feedback.color;
             g_vision_feedback.offset_x = feedback.offset_x;
             g_vision_feedback.offset_y = feedback.offset_y;
             g_vision_feedback.is_static = feedback.is_static;
             SM_SetCurrentColor(feedback.color);
+            update_material_motion_state(feedback.is_static);
 
 #if !CONFIG_VISION_ADJUST_ONLY
             State_t adjust_state = SM_GetState();
