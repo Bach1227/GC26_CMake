@@ -358,7 +358,8 @@ static bool execute_vision_adjust(void)
     TickType_t last_wake = xTaskGetTickCount();
     ChassisVisionAxis_t axis = CHASSIS_VISION_AXIS_X;
     uint32_t last_feedback_sequence = 0U;
-    uint8_t stable_frames = 0U;
+    uint32_t stable_start_tick = 0U;
+    bool stable_timing = false;
     bool motors_running = false;
     bool completed = false;
 
@@ -431,24 +432,27 @@ static bool execute_vision_adjust(void)
                      <= CONFIG_VISION_ADJUST_DEADZONE);
 
                 if (error_in_threshold) {
-                    if (stable_frames < UINT8_MAX) {
-                        ++stable_frames;
+                    if (!stable_timing) {
+                        stable_start_tick = feedback_tick;
+                        stable_timing = true;
                     }
                 } else {
-                    stable_frames = 0U;
+                    stable_timing = false;
                 }
 
                 if (axis == CHASSIS_VISION_AXIS_X) {
-                    if (stable_frames
-                        >= CONFIG_VISION_ADJUST_X_STABLE_FRAMES) {
+                    if (stable_timing &&
+                        (uint32_t)(now - stable_start_tick)
+                            >= CONFIG_VISION_ADJUST_STABLE_TIME_MS) {
                         axis = CHASSIS_VISION_AXIS_Y;
-                        stable_frames = 0U;
+                        stable_timing = false;
                         PID_ClearUp_float(&vision_x_pid);
                         PID_ClearUp_float(&vision_y_pid);
                         g_chassis_adjust_axis = axis;
                     }
-                } else if (stable_frames
-                           >= CONFIG_VISION_ADJUST_Y_STABLE_FRAMES) {
+                } else if (stable_timing &&
+                           (uint32_t)(now - stable_start_tick)
+                               >= CONFIG_VISION_ADJUST_STABLE_TIME_MS) {
                     completed = true;
                     taskENTER_CRITICAL();
                     g_chassis_adjust_heading_active = false;
@@ -480,12 +484,15 @@ static bool execute_vision_adjust(void)
             heading_pid.ValueLast = gyro.angle;
             drive_translation(rpm_x, rpm_y, yaw_rpm);
             motors_running = true;
-        } else if (motors_running) {
-            stop_all_motors();
-            motors_running = false;
-            PID_ClearUp_float(&vision_x_pid);
-            PID_ClearUp_float(&vision_y_pid);
-            PID_ClearUp_float(&heading_pid);
+        } else {
+            stable_timing = false;
+            if (motors_running) {
+                stop_all_motors();
+                motors_running = false;
+                PID_ClearUp_float(&vision_x_pid);
+                PID_ClearUp_float(&vision_y_pid);
+                PID_ClearUp_float(&heading_pid);
+            }
         }
 
         vTaskDelayUntil(&last_wake,

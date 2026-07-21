@@ -17,6 +17,13 @@ typedef enum {
     PROTOCOL_CMD_VISION_FEEDBACK   = 0x02u,
 } ProtocolCommand_t;
 
+typedef enum {
+    PROTOCOL_COLOR_NONE  = 0u,
+    PROTOCOL_COLOR_RED   = 1u,
+    PROTOCOL_COLOR_GREEN = 2u,
+    PROTOCOL_COLOR_BLUE  = 3u,
+} ProtocolColor_t;
+
 typedef struct {
     uint8_t first[3];    /* 第一轮物料顺序 */
     uint8_t second[3];   /* 第二轮物料顺序 */

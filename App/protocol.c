@@ -54,6 +54,34 @@ static bool is_adjust_state(State_t state)
            state == STATE_ADJUST_ROUGH_2 ||
            state == STATE_ADJUST_TEMP_2;
 }
+
+static bool use_feedback_for_adjust(State_t state, uint8_t color)
+{
+    bool rough_or_temp =
+        state == STATE_ADJUST_ROUGH_1 ||
+        state == STATE_ADJUST_TEMP_1 ||
+        state == STATE_ADJUST_ROUGH_2 ||
+        state == STATE_ADJUST_TEMP_2;
+
+    if (!rough_or_temp) {
+        return true;
+    }
+
+    switch ((ProtocolColor_t)color) {
+    case PROTOCOL_COLOR_GREEN:
+        return true;
+    case PROTOCOL_COLOR_RED:
+        /* Reserved: add red-target adjustment behavior here later. */
+        return false;
+    case PROTOCOL_COLOR_BLUE:
+        /* Reserved: add blue-target adjustment behavior here later. */
+        return false;
+    case PROTOCOL_COLOR_NONE:
+    default:
+        /* Reserved: handle target loss or unknown colors here later. */
+        return false;
+    }
+}
 #endif
 
 static bool valid_material_sequence(const uint8_t order[3])
@@ -129,7 +157,9 @@ static void dispatch_frame(uint8_t command, const uint8_t *payload,
             SM_SetCurrentColor(feedback.color);
 
 #if !CONFIG_VISION_ADJUST_ONLY
-            if (!is_adjust_state(SM_GetState())) {
+            State_t adjust_state = SM_GetState();
+            if (!is_adjust_state(adjust_state) ||
+                !use_feedback_for_adjust(adjust_state, feedback.color)) {
                 break;
             }
 #endif
