@@ -210,7 +210,11 @@ static void Action_MoveToRaw1(void)
 #if defined(USE_GIMBAL)
     /* 前往原料区途中将云台从内收位折到地图中间位。 */
     Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
+    Gimbal_Lift(-20000);
+    osDelay(2);
     Gimbal_Extend(CONFIG_GIMBAL_MAP_EXTEND_POS_2_PULSES);
+    osDelay(2);
+    osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
 #endif
 }
 
@@ -323,7 +327,7 @@ static void Action_MoveToTemp1(void)
 {
     SM_ChassisMove(-980, 0, EVENT_NONE);
     SM_ChassisRotate(CONFIG_CHASSIS_TEMP_HEADING_DEG, EVENT_NONE);
-    SM_ChassisMove(-1000, 0, EVENT_ARRIVED);
+    SM_ChassisMove(-1100, 0, EVENT_ARRIVED);
 }
 
 static void Action_PlaceTemp1(void)
@@ -525,7 +529,7 @@ static void Action_MoveToTemp2(void)
 {
     SM_ChassisMove(-980, 0, EVENT_NONE);
     SM_ChassisRotate(CONFIG_CHASSIS_TEMP_HEADING_DEG, EVENT_NONE);
-    SM_ChassisMove(-1000, 0, EVENT_ARRIVED);
+    SM_ChassisMove(-1100, 0, EVENT_ARRIVED);
 }
 
 static void Action_StackTemp2(void)
