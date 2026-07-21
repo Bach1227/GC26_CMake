@@ -41,7 +41,7 @@ const uint8_t expected_color[4] = {0, 2, 1, 3};
 volatile uint8_t g_current_color = 0;
 volatile bool    g_color_pending = false;
 
-#ifdef USE_GIMBAL
+#if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
 
 /* 伸长距离 */
 #define PICKUP_EXTEND  500
@@ -72,7 +72,7 @@ static bool wait_expected_color(uint8_t pos)
 #endif
 }
 
-#endif /* USE_GIMBAL */
+#endif /* USE_GIMBAL && CONFIG_ENABLE_MATERIAL_PLACEMENT */
 
 /* 前向声明 */
 static void SM_Task(void *argument);
@@ -89,6 +89,17 @@ static void SM_ChassisMove(int16_t x, int16_t y, Event_t completion_event)
 #endif
 }
 
+static void SM_ChassisRotate(float degrees, Event_t completion_event)
+{
+#if CONFIG_USE_CHASSIS
+    Chassis_SendRotateCmd(degrees, completion_event);
+#else
+    (void)degrees;
+    if (completion_event != EVENT_NONE)
+        SM_SendEvent(completion_event);
+#endif
+}
+
 /* ====================================================================== */
 /*  动作函数                                                              */
 /* ====================================================================== */
@@ -100,14 +111,18 @@ static void Action_Nop(void)
 static void Action_EnterAdjust(void)
 {
 #if CONFIG_USE_CHASSIS
-    if (sm_currentState == STATE_MOVE_TO_ROUGH_1 ||
+    if (sm_currentState == STATE_MOVE_TO_RAW_1 ||
+        sm_currentState == STATE_MOVE_TO_RAW_2) {
+        (void)Chassis_BeginVisionAdjustAtHeading(
+            CONFIG_CHASSIS_RAW_HEADING_DEG);
+    } else if (sm_currentState == STATE_MOVE_TO_ROUGH_1 ||
         sm_currentState == STATE_MOVE_TO_ROUGH_2) {
         (void)Chassis_BeginVisionAdjustAtHeading(
-            CONFIG_VISION_ADJUST_ROUGH_HEADING_DEG);
+            CONFIG_CHASSIS_ROUGH_HEADING_DEG);
     } else if (sm_currentState == STATE_MOVE_TO_TEMP_1 ||
                sm_currentState == STATE_MOVE_TO_TEMP_2) {
         (void)Chassis_BeginVisionAdjustAtHeading(
-            CONFIG_VISION_ADJUST_TEMP_HEADING_DEG);
+            CONFIG_CHASSIS_TEMP_HEADING_DEG);
     } else {
         (void)Chassis_BeginVisionAdjust();
     }
@@ -158,7 +173,7 @@ static void Action_ParseQR(void)
 
 /* ---- 第一批次 ---- */
 
-#ifdef USE_GIMBAL
+#if defined(USE_GIMBAL) && CONFIG_ENABLE_MATERIAL_PLACEMENT
 
 /* 车体上的 3 个物料位置角度 */
 static float car_angle(uint8_t pos)
@@ -181,7 +196,7 @@ static float map_angle(uint8_t pos)
     return deg;
 }
 
-#endif /* USE_GIMBAL */
+#endif /* USE_GIMBAL && CONFIG_ENABLE_MATERIAL_PLACEMENT */
 
 static void Action_MoveToRaw1(void)
 {
@@ -190,6 +205,7 @@ static void Action_MoveToRaw1(void)
     sm_material_sequence_event_sent = false;
     taskEXIT_CRITICAL();
 
+    SM_ChassisRotate(CONFIG_CHASSIS_RAW_HEADING_DEG, EVENT_NONE);
     SM_ChassisMove(1150, 0, EVENT_ARRIVED);
 #if defined(USE_GIMBAL)
     /* 前往原料区途中将云台从内收位折到地图中间位。 */
@@ -211,7 +227,7 @@ static void Action_FetchRaw1(void)
 static void Action_MoveToRough1(void)
 {
     SM_ChassisMove(-600, 0, EVENT_NONE);        /* 左移到主干道 */
-    Chassis_SendRotateCmd(180.0f, EVENT_NONE);         /* 逆时针转180° (陀螺仪闭环) */
+    SM_ChassisRotate(CONFIG_CHASSIS_ROUGH_HEADING_DEG, EVENT_NONE); /* 陀螺仪闭环 */
     SM_ChassisMove(0, -2050, EVENT_ARRIVED);      /* 直行到粗加工区 */
 }
 
@@ -306,7 +322,7 @@ static void Action_PlaceRough1(void)
 static void Action_MoveToTemp1(void)
 {
     SM_ChassisMove(-980, 0, EVENT_NONE);
-    Chassis_SendRotateCmd(90.0f, EVENT_NONE);
+    SM_ChassisRotate(CONFIG_CHASSIS_TEMP_HEADING_DEG, EVENT_NONE);
     SM_ChassisMove(-1000, 0, EVENT_ARRIVED);
 }
 
@@ -364,7 +380,7 @@ static void Action_PlaceTemp1(void)
 static void Action_MoveToRaw2(void)
 {
     SM_ChassisMove(-1150, 0, EVENT_NONE);
-    Chassis_SendRotateCmd(0.01f, EVENT_NONE);
+    SM_ChassisRotate(CONFIG_CHASSIS_RAW_HEADING_DEG, EVENT_NONE);
     SM_ChassisMove(-650, 0, EVENT_ARRIVED);
 }
 
@@ -418,7 +434,7 @@ static void Action_FetchRaw2(void)
 static void Action_MoveToRough2(void)
 {
     SM_ChassisMove(-600, 0, EVENT_NONE);        /* 左移到主干道 */
-    Chassis_SendRotateCmd(180.0f, EVENT_NONE);         /* 逆时针转180° (陀螺仪闭环) */
+    SM_ChassisRotate(CONFIG_CHASSIS_ROUGH_HEADING_DEG, EVENT_NONE); /* 陀螺仪闭环 */
     SM_ChassisMove(0, -2050, EVENT_ARRIVED);      /* 直行到粗加工区 */
 }
 
@@ -508,7 +524,7 @@ static void Action_PlaceRough2(void)
 static void Action_MoveToTemp2(void)
 {
     SM_ChassisMove(-980, 0, EVENT_NONE);
-    Chassis_SendRotateCmd(90.0f, EVENT_NONE);
+    SM_ChassisRotate(CONFIG_CHASSIS_TEMP_HEADING_DEG, EVENT_NONE);
     SM_ChassisMove(-1000, 0, EVENT_ARRIVED);
 }
 

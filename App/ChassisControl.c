@@ -586,7 +586,7 @@ int Chassis_SendMoveCmd(int16_t x, int16_t y, Event_t completion_event)
 
 int Chassis_SendRotateCmd(float degrees, Event_t completion_event)
 {
-    int16_t centidegree = (int16_t)(degrees * 100.0f);
+    int16_t centidegree = (int16_t)lroundf(degrees * 100.0f);
     ChassisMoveCmd_t cmd = {
         .x = 0,
         .y = 0,
