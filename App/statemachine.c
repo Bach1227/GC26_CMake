@@ -25,9 +25,13 @@ static uint32_t              sm_tableSize = 0;
 /*  事件队列                                                              */
 /* ====================================================================== */
 
-#define SM_QUEUE_LENGTH     16
+#define SM_QUEUE_LENGTH          16
+#define SM_CHASSIS_SEND_RETRIES  3U
 
 static QueueHandle_t sm_queue = NULL;
+static Event_t sm_followup_event = EVENT_NONE;
+static volatile uint32_t sm_chassis_move_send_failures = 0U;
+static volatile uint32_t sm_chassis_rotate_send_failures = 0U;
 
 uint8_t seq[2][3] = {
     {2u, 3u, 1u},
@@ -95,7 +99,13 @@ static void SM_Task(void *argument);
 static void SM_ChassisMove(int16_t x, int16_t y, Event_t completion_event)
 {
 #if CONFIG_USE_CHASSIS
-    Chassis_SendMoveCmd(x, y, completion_event);
+    for (uint32_t retry = 0U; retry < SM_CHASSIS_SEND_RETRIES; ++retry) {
+        if (Chassis_SendMoveCmd(x, y, completion_event) == 0) {
+            return;
+        }
+        osDelay(1);
+    }
+    ++sm_chassis_move_send_failures;
 #else
     (void)x;
     (void)y;
@@ -107,12 +117,24 @@ static void SM_ChassisMove(int16_t x, int16_t y, Event_t completion_event)
 static void SM_ChassisRotate(float degrees, Event_t completion_event)
 {
 #if CONFIG_USE_CHASSIS
-    Chassis_SendRotateCmd(degrees, completion_event);
+    for (uint32_t retry = 0U; retry < SM_CHASSIS_SEND_RETRIES; ++retry) {
+        if (Chassis_SendRotateCmd(degrees, completion_event) == 0) {
+            return;
+        }
+        osDelay(1);
+    }
+    ++sm_chassis_rotate_send_failures;
 #else
     (void)degrees;
     if (completion_event != EVENT_NONE)
         SM_SendEvent(completion_event);
 #endif
+}
+
+/* 同步动作完成后由状态机任务直接接续，不再向自己的队列回发事件。 */
+static void SM_FollowUp(Event_t event)
+{
+    sm_followup_event = event;
 }
 
 /* ====================================================================== */
@@ -126,16 +148,16 @@ static void Action_Nop(void)
 static void Action_EnterAdjust(void)
 {
 #if CONFIG_USE_CHASSIS
-    if (sm_currentState == STATE_MOVE_TO_RAW_1 ||
-        sm_currentState == STATE_MOVE_TO_RAW_2) {
+    if (sm_currentState == STATE_ADJUST_RAW_1 ||
+        sm_currentState == STATE_ADJUST_RAW_2) {
         (void)Chassis_BeginVisionAdjustAtHeading(
             CONFIG_CHASSIS_RAW_HEADING_DEG);
-    } else if (sm_currentState == STATE_MOVE_TO_ROUGH_1 ||
-        sm_currentState == STATE_MOVE_TO_ROUGH_2) {
+    } else if (sm_currentState == STATE_ADJUST_ROUGH_1 ||
+        sm_currentState == STATE_ADJUST_ROUGH_2) {
         (void)Chassis_BeginVisionAdjustAtHeading(
             CONFIG_CHASSIS_ROUGH_HEADING_DEG);
-    } else if (sm_currentState == STATE_MOVE_TO_TEMP_1 ||
-               sm_currentState == STATE_MOVE_TO_TEMP_2) {
+    } else if (sm_currentState == STATE_ADJUST_TEMP_1 ||
+               sm_currentState == STATE_ADJUST_TEMP_2) {
         (void)Chassis_BeginVisionAdjustAtHeading(
             CONFIG_CHASSIS_TEMP_HEADING_DEG);
     } else {
@@ -146,7 +168,7 @@ static void Action_EnterAdjust(void)
 #if CONFIG_USE_CHASSIS
     Chassis_EndVisionAdjust();
 #endif
-    SM_SendEvent(EVENT_ADJUST_DONE);
+    SM_FollowUp(EVENT_ADJUST_DONE);
 #endif
 }
 
@@ -166,7 +188,7 @@ static void Action_Start(void)
 static void Action_ParseQR(void)
 {
 #if CONFIG_SKIP_QR
-    SM_SendEvent(EVENT_ACTION_DONE);
+    SM_FollowUp(EVENT_ACTION_DONE);
 #else
     bool send_ready_event = false;
 
@@ -178,10 +200,8 @@ static void Action_ParseQR(void)
     }
     taskEXIT_CRITICAL();
 
-    if (send_ready_event && SM_SendEvent(EVENT_ACTION_DONE) != 0) {
-        taskENTER_CRITICAL();
-        sm_material_sequence_event_sent = false;
-        taskEXIT_CRITICAL();
+    if (send_ready_event) {
+        SM_FollowUp(EVENT_ACTION_DONE);
     }
 #endif
 }
@@ -273,9 +293,9 @@ static void FetchRawToCar(void)
     
     // Gimbal_Extend(CONFIG_GIMBAL_CAR_RETRACT_PULSES);
     // osDelay(1000);
-    SM_SendEvent(EVENT_ACTION_DONE);
+    SM_FollowUp(EVENT_ACTION_DONE);
 #else
-    SM_SendEvent(EVENT_ACTION_DONE);
+    SM_FollowUp(EVENT_ACTION_DONE);
 #endif
 }
 
@@ -371,7 +391,7 @@ static void Action_PlaceRough1(void)
     #endif
 
 #endif
-    SM_SendEvent(EVENT_ACTION_DONE);
+    SM_FollowUp(EVENT_ACTION_DONE);
 }
 
 static void Action_MoveToTemp1(void)
@@ -422,9 +442,9 @@ static void Action_PlaceTemp1(void)
     /* 前往原料区途中将云台从内收位折到地图中间位。 */
     Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
 #endif
-    SM_SendEvent(EVENT_ACTION_DONE);
+    SM_FollowUp(EVENT_ACTION_DONE);
 #else
-    SM_SendEvent(EVENT_ACTION_DONE);
+    SM_FollowUp(EVENT_ACTION_DONE);
 #endif
 }
 
@@ -522,9 +542,9 @@ static void Action_PlaceRough2(void)
     /* 前往原料区途中将云台从内收位折到地图中间位。 */
     Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
 #endif
-    SM_SendEvent(EVENT_ACTION_DONE);
+    SM_FollowUp(EVENT_ACTION_DONE);
 #else
-    SM_SendEvent(EVENT_ACTION_DONE);
+    SM_FollowUp(EVENT_ACTION_DONE);
 #endif
 }
 
@@ -571,9 +591,9 @@ static void Action_StackTemp2(void)
         extend_and_wait(-m_ext, CONFIG_GIMBAL_EXTEND_MAP_WAIT_MS);
     }
     Gimbal_SetAngle(0.0f);
-    SM_SendEvent(EVENT_ACTION_DONE);
+    SM_FollowUp(EVENT_ACTION_DONE);
 #else
-    SM_SendEvent(EVENT_ACTION_DONE);
+    SM_FollowUp(EVENT_ACTION_DONE);
 #endif
 }
 
@@ -630,6 +650,7 @@ void SM_Init(void)
     sm_table       = SM_DefaultTable;
     sm_tableSize   = SM_DefaultTableSize;
     sm_currentState = STATE_IDLE;
+    sm_followup_event = EVENT_NONE;
     sm_material_sequence_ready = false;
     sm_material_sequence_event_sent = false;
 
@@ -723,20 +744,32 @@ void SM_SetCurrentColor(uint8_t color)
 
 void SM_ProcessEvent(Event_t event)
 {
-    if (sm_table == NULL) return;
+    while (sm_table != NULL && event != EVENT_NONE) {
+        const StateMachineTable_t *matched_entry = NULL;
 
-    for (uint32_t i = 0; i < sm_tableSize; i++)
-    {
-        const StateMachineTable_t *entry = &sm_table[i];
+        for (uint32_t i = 0; i < sm_tableSize; ++i) {
+            const StateMachineTable_t *entry = &sm_table[i];
 
-        if (entry->currentState == sm_currentState && entry->event == event)
-        {
-            if (entry->action != NULL)
-                entry->action();
+            if (entry->currentState == sm_currentState &&
+                entry->event == event) {
+                matched_entry = entry;
+                break;
+            }
+        }
 
-            sm_currentState = entry->nextState;
+        if (matched_entry == NULL) {
             return;
         }
+
+        /* 先进入目标状态，再执行动作；同步动作可在返回后直接接续。 */
+        sm_currentState = matched_entry->nextState;
+        sm_followup_event = EVENT_NONE;
+
+        if (matched_entry->action != NULL) {
+            matched_entry->action();
+        }
+
+        event = sm_followup_event;
     }
 
     /* 无匹配: 忽略 */
@@ -750,6 +783,7 @@ void SM_Reset(State_t initialState)
 {
     taskENTER_CRITICAL();
     sm_currentState = initialState;
+    sm_followup_event = EVENT_NONE;
     sm_material_sequence_ready = false;
     sm_material_sequence_event_sent = false;
     taskEXIT_CRITICAL();
