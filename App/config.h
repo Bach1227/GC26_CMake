@@ -5,7 +5,7 @@
 #define CONFIG_USE_GIMBAL              1
 
 /* 底盘控制：1=正常执行移动，0=状态机直接模拟到达并跳过移动。 */
-#define CONFIG_USE_CHASSIS                1
+#define CONFIG_USE_CHASSIS                0
 
 /*
  * 纯视觉微调测试模式：
@@ -101,6 +101,14 @@
 #define CONFIG_GIMBAL_GRIPPER_WAIT_MS          200U
 
 /*
+ * 伸展电机到地图工位的相对脉冲。
+ * 地面取放和码垛共用，每个位置可独立调整。
+ */
+#define CONFIG_GIMBAL_MAP_EXTEND_POS_1_PULSES  400L
+#define CONFIG_GIMBAL_MAP_EXTEND_POS_2_PULSES  200L
+#define CONFIG_GIMBAL_MAP_EXTEND_POS_3_PULSES  400L
+
+/*
  * 夹爪舵机 PWM：TIM1 已配置为 1 MHz 计数、20 ms 周期，因此 CCR 数值
  * 与高电平脉宽（us）相同。当前舵机有效行程为 0.5-2.5 ms。
  */
@@ -111,7 +119,7 @@
  * 按键任务启动前的夹爪舵机测试：
  * 1=上电后先张开、再闭合；0=只初始化 PWM 并保持闭合。
  */
-#define CONFIG_GRIPPER_STARTUP_TEST          1
+#define CONFIG_GRIPPER_STARTUP_TEST          0
 #define CONFIG_GRIPPER_STARTUP_TEST_HOLD_MS  2000U
 
 /* 车体物料放置位置对应的云台角度（度）。 */
@@ -121,8 +129,8 @@
 
 /* 地图物料放置位置对应的云台角度（度）。 */
 #define CONFIG_MAP_MATERIAL_POS_1_DEG  150
-#define CONFIG_MAP_MATERIAL_POS_2_DEG  90
-#define CONFIG_MAP_MATERIAL_POS_3_DEG  (-150.0f)
+#define CONFIG_MAP_MATERIAL_POS_2_DEG  135
+#define CONFIG_MAP_MATERIAL_POS_3_DEG  90
 
 /* 云台线缆保护：以当前电机零点为中心，只允许在单圈内运动。 */
 #define CONFIG_GIMBAL_SINGLE_TURN_ENABLE  1

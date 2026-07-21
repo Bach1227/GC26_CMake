@@ -48,11 +48,12 @@ volatile bool    g_color_pending = false;
 #define PLACE_EXTEND   300
 #define EXTEND_DIFF    (PICKUP_EXTEND - PLACE_EXTEND)  /* 200 */
 #define CAR_EXTEND      300
-#define MAP_EXTEND_1_3  400
-#define MAP_EXTEND_2    200
 
-static int32_t map_extend(uint8_t pos) {
-    return (pos == 2) ? MAP_EXTEND_2 : MAP_EXTEND_1_3;
+static int32_t map_extend(uint8_t pos)
+{
+    if (pos == 1) return CONFIG_GIMBAL_MAP_EXTEND_POS_1_PULSES;
+    if (pos == 2) return CONFIG_GIMBAL_MAP_EXTEND_POS_2_PULSES;
+    return CONFIG_GIMBAL_MAP_EXTEND_POS_3_PULSES;
 }
 
 static void Gripper_Close(void) { Gimbal_Gripper(CONFIG_GRIPPER_CLOSE_PULSE_US); }

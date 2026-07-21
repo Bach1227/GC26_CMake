@@ -291,11 +291,11 @@ static void ExecFetchRaw(Event_t done_event)
     //                 CONFIG_STEPPER_LIFT_ACCEL,
     //                 ZDT_SYNC_IMMEDIATE);
 
-    // Gimbal_Extend(5000);
-    // osDelay(100);
     float folded_angle = CONFIG_MAP_MATERIAL_POS_2_DEG;
     Gimbal_SetAngle(folded_angle);
     osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
+    Gimbal_Extend(FETCH_PICKUP_EXTEND);
+    osDelay(100);
     Gimbal_Gripper(CONFIG_GRIPPER_OPEN_PULSE_US);
     osDelay(CONFIG_GIMBAL_GRIPPER_WAIT_MS);
     for (int i = 0; i < 3; i++)
@@ -310,6 +310,9 @@ static void ExecFetchRaw(Event_t done_event)
             osDelay(CONFIG_GIMBAL_LIFT_TURNTABLE_WAIT_MS);
         // }
 
+        Gimbal_Extend(-FETCH_EXTEND_DIFF);
+        osDelay(100);
+
         float angle = fetch_car_angle(seq[0][i]);
         Gimbal_SetAngle(angle);
         osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
@@ -321,12 +324,15 @@ static void ExecFetchRaw(Event_t done_event)
         Gimbal_Lift(CONFIG_GIMBAL_LIFT_CAR_PULSES);
         osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
 
+        Gimbal_Extend(FETCH_EXTEND_DIFF);
+        osDelay(100);
+
         float folded_angle = CONFIG_MAP_MATERIAL_POS_2_DEG;
         Gimbal_SetAngle(folded_angle);
         osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
     }
 
-    // Gimbal_Extend(-FETCH_PICKUP_EXTEND);
+    Gimbal_Extend(-FETCH_PICKUP_EXTEND);
     osDelay(100);
 
 
