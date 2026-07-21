@@ -2,7 +2,7 @@
 #define APP_CONFIG_H
 
 /* 启用状态机中的云台动作。 */
-#define CONFIG_USE_GIMBAL              0
+#define CONFIG_USE_GIMBAL              1
 
 /* 底盘控制：1=正常执行移动，0=状态机直接模拟到达并跳过移动。 */
 #define CONFIG_USE_CHASSIS                1
@@ -28,7 +28,7 @@
  * Short PE8 (TX) to PE7 (RX); a non-echoing protocol test frame is sent
  * periodically so the valid 0x01 echo command cannot create a feedback loop.
  */
-#define CONFIG_COMM_UART_LOOPBACK_TEST            0
+#define CONFIG_COMM_UART_LOOPBACK_TEST            1
 #define CONFIG_COMM_UART_LOOPBACK_TEST_PERIOD_MS  1000U
 
 /* DM 电机低速匀速旋转测试；正常运行时保持为 0。 */
