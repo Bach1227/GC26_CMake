@@ -605,7 +605,8 @@ int Chassis_SendRotateCmd(float degrees, Event_t completion_event)
     return -1;
 }
 
-bool Chassis_BeginVisionAdjust(void)
+static bool begin_vision_adjust(bool use_current_heading,
+                                float requested_heading_deg)
 {
     GyroSample_t gyro;
     ChassisMoveCmd_t cmd = {
@@ -628,8 +629,14 @@ bool Chassis_BeginVisionAdjust(void)
         return false;
     }
 
+    float heading_target = gyro.angle;
+    if (!use_current_heading) {
+        heading_target += remainderf(requested_heading_deg - gyro.angle,
+                                     360.0f);
+    }
+
     taskENTER_CRITICAL();
-    g_chassis_adjust_heading_deg = gyro.angle;
+    g_chassis_adjust_heading_deg = heading_target;
     adjust_heading_zero_generation = gyro.zero_generation;
     vision_offset_x = 0;
     vision_offset_y = 0;
@@ -647,6 +654,16 @@ bool Chassis_BeginVisionAdjust(void)
         return false;
     }
     return true;
+}
+
+bool Chassis_BeginVisionAdjust(void)
+{
+    return begin_vision_adjust(true, 0.0f);
+}
+
+bool Chassis_BeginVisionAdjustAtHeading(float heading_deg)
+{
+    return begin_vision_adjust(false, heading_deg);
 }
 
 void Chassis_UpdateVisionAdjust(int8_t offset_x, int8_t offset_y)

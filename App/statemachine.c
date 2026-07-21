@@ -100,7 +100,17 @@ static void Action_Nop(void)
 static void Action_EnterAdjust(void)
 {
 #if CONFIG_USE_CHASSIS
-    (void)Chassis_BeginVisionAdjust();
+    if (sm_currentState == STATE_MOVE_TO_ROUGH_1 ||
+        sm_currentState == STATE_MOVE_TO_ROUGH_2) {
+        (void)Chassis_BeginVisionAdjustAtHeading(
+            CONFIG_VISION_ADJUST_ROUGH_HEADING_DEG);
+    } else if (sm_currentState == STATE_MOVE_TO_TEMP_1 ||
+               sm_currentState == STATE_MOVE_TO_TEMP_2) {
+        (void)Chassis_BeginVisionAdjustAtHeading(
+            CONFIG_VISION_ADJUST_TEMP_HEADING_DEG);
+    } else {
+        (void)Chassis_BeginVisionAdjust();
+    }
 #endif
 #if CONFIG_SKIP_ADJUST
 #if CONFIG_USE_CHASSIS

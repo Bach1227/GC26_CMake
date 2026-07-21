@@ -37,6 +37,9 @@ int  Chassis_SendRotateCmd(float degrees, Event_t completion_event);
 /** 进入视觉微调阶段并记录一次当前车头方向。 */
 bool Chassis_BeginVisionAdjust(void);
 
+/** 进入视觉微调阶段并锁定指定的绝对车头方向。 */
+bool Chassis_BeginVisionAdjustAtHeading(float heading_deg);
+
 /** 更新视觉闭环使用的最新归一化偏差，不创建移动队列项。 */
 void Chassis_UpdateVisionAdjust(int8_t offset_x, int8_t offset_y);
 
