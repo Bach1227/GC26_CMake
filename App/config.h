@@ -82,7 +82,7 @@
 
 /* 视觉微调：X/Y 使用 PID 框架的纯 P 闭环，输入为归一化偏差。 */
 #define CONFIG_VISION_ADJUST_KP_X            1.0f
-#define CONFIG_VISION_ADJUST_KP_Y            -0.5f
+#define CONFIG_VISION_ADJUST_KP_Y            -0.4f
 #define CONFIG_VISION_ADJUST_DEADZONE        5.0f
 #define CONFIG_VISION_ADJUST_RPM_LIMIT       15.0f
 #define CONFIG_VISION_ADJUST_YAW_RPM_LIMIT   10.0f
