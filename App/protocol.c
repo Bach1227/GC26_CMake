@@ -67,6 +67,12 @@ static bool is_adjust_state(State_t state)
            state == STATE_ADJUST_TEMP_2;
 }
 
+static bool require_static_feedback_for_adjust(State_t state)
+{
+    return state == STATE_ADJUST_RAW_1 ||
+           state == STATE_ADJUST_RAW_2;
+}
+
 static bool use_feedback_for_adjust(State_t state, uint8_t color)
 {
     bool rough_or_temp =
@@ -178,11 +184,17 @@ static void dispatch_frame(uint8_t command, const uint8_t *payload,
 #endif
 
             /*
-             * is_static only gates whether this sample participates in the
-             * control loop. Completion is determined exclusively by the
-             * X/Y error thresholds in ChassisControl.
+             * Raw 物料可能仍在运动，只允许静态帧驱动底盘，避免车辆追料。
+             * Rough/Temp 的物料固定，绿色帧不受 is_static 限制；这里的
+             * 非静态通常是底盘运动引起的画面变化。
+             * 物料动静序列已在上方独立更新，不影响 Raw 的静-动-静夹取。
              */
+#if CONFIG_VISION_ADJUST_ONLY
             if (feedback.is_static == 0u) {
+#else
+            if (require_static_feedback_for_adjust(adjust_state) &&
+                feedback.is_static == 0u) {
+#endif
                 break;
             }
 
