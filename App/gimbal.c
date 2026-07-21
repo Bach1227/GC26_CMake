@@ -26,7 +26,7 @@
 #define PID_Kp              0.028f
 #define PID_Ki              0.0010f
 #define PID_Kd              0.0f
-#define SPEED_LIMIT         6.0f          /* 输出上限 */
+#define SPEED_LIMIT         8.0f          /* 输出上限 */
 #define INTEGRAL_RANGE      30.0f         /* ° */
 #define INTEGRAL_LIMIT      180.0f        /* ° */
 #define DEAD_ZONE           1.0f          /* ° 到位死区 */
