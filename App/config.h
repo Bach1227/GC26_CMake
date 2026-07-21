@@ -18,7 +18,7 @@
 #define CONFIG_VISION_ADJUST_ONLY         0
 
 /* 跳过二维码物料顺序：1=使用默认顺序 {2, 3, 1} 直接继续，0=等待上位机下发。 */
-#define CONFIG_SKIP_QR                 1
+#define CONFIG_SKIP_QR                 0
 
 /* 跳过视觉微调：1=到位后直接继续，0=等待 X/Y 偏差均稳定进入阈值。 */
 #define CONFIG_SKIP_ADJUST             0
@@ -104,8 +104,8 @@
 #define CONFIG_CHASSIS_TEMP_HEADING_DEG   90.0f
 
 /* 6号升降电机的四档取放高度（相对顶部安全位的下降脉冲）。 */
-#define CONFIG_GIMBAL_LIFT_GROUND_PULSES     90000L
-#define CONFIG_GIMBAL_LIFT_CAR_PULSES        90000L
+#define CONFIG_GIMBAL_LIFT_GROUND_PULSES     13000L
+#define CONFIG_GIMBAL_LIFT_CAR_PULSES        95000L
 #define CONFIG_GIMBAL_LIFT_TURNTABLE_PULSES  100000L
 #define CONFIG_GIMBAL_LIFT_STACK_PULSES      90000L
 #define CONFIG_GIMBAL_LIFT_GROUND_WAIT_MS     2000U
@@ -140,8 +140,8 @@
 
 /* 车体物料放置位置对应的云台角度（度）。 */
 #define CONFIG_CAR_MATERIAL_POS_1_DEG  -8.0f
-#define CONFIG_CAR_MATERIAL_POS_2_DEG  CONFIG_CAR_MATERIAL_POS_1_DEG-30.0f
-#define CONFIG_CAR_MATERIAL_POS_3_DEG  CONFIG_CAR_MATERIAL_POS_2_DEG-35.0f
+#define CONFIG_CAR_MATERIAL_POS_2_DEG  CONFIG_CAR_MATERIAL_POS_1_DEG-35.0f
+#define CONFIG_CAR_MATERIAL_POS_3_DEG  CONFIG_CAR_MATERIAL_POS_2_DEG-30.0f
 
 /* 地图物料放置位置对应的云台角度（度）。 */
 #define CONFIG_MAP_MATERIAL_POS_1_DEG  150

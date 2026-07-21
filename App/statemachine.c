@@ -261,7 +261,7 @@ static void FetchRawToCar(void)
         osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
     }
 
-    // SM_SendEvent(EVENT_ACTION_DONE);
+    SM_SendEvent(EVENT_ACTION_DONE);
 #else
     SM_SendEvent(EVENT_ACTION_DONE);
 #endif
