@@ -145,9 +145,9 @@ static void Action_EnterAdjust(void)
 static void Action_Start(void)
 {
     /* 临时测试：原有平移动作。 */
-    SM_ChassisMove(0, 380, EVENT_NONE);        /* 先沿 Y 轴到中间点 */
+    SM_ChassisMove(0, 410, EVENT_NONE);        /* 先沿 Y 轴到中间点 */
     // SM_ChassisMove(500, 0, EVENT_NONE);        /* 再沿 X 轴到中间点 */
-    SM_ChassisMove(820, 000, EVENT_ARRIVED);     /* 到 QR 位 */
+    SM_ChassisMove(870, 000, EVENT_ARRIVED);     /* 到 QR 位 */
 
     /* 航向角闭环测试：相对陀螺仪软件零点转到 +90°。 */
     // Chassis_SendRotateCmd(90.0f, EVENT_NONE);
@@ -244,7 +244,7 @@ static void FetchRawToCar(void)
 
         /* 车体比 Raw 原点更靠内，负位移表示缩短。 */
         Gimbal_Extend(-CONFIG_GIMBAL_CAR_RETRACT_PULSES);
-        osDelay(100);
+        osDelay(1000);
         Gimbal_SetAngle(car_angle(material_color));
         osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
 
@@ -256,12 +256,12 @@ static void FetchRawToCar(void)
         osDelay(CONFIG_GIMBAL_LIFT_CAR_WAIT_MS);
 
         Gimbal_Extend(CONFIG_GIMBAL_CAR_RETRACT_PULSES);
-        osDelay(100);
+        osDelay(1000);
         Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
         osDelay(CONFIG_GIMBAL_ROTATE_WAIT_MS);
     }
 
-    SM_SendEvent(EVENT_ACTION_DONE);
+    // SM_SendEvent(EVENT_ACTION_DONE);
 #else
     SM_SendEvent(EVENT_ACTION_DONE);
 #endif
