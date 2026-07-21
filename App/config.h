@@ -2,10 +2,10 @@
 #define APP_CONFIG_H
 
 /* 启用状态机中的云台动作。 */
-#define CONFIG_USE_GIMBAL              1
+#define CONFIG_USE_GIMBAL              0
 
 /* 底盘控制：1=正常执行移动，0=状态机直接模拟到达并跳过移动。 */
-#define CONFIG_USE_CHASSIS                0
+#define CONFIG_USE_CHASSIS                1
 
 /*
  * 纯视觉微调测试模式：

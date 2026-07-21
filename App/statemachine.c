@@ -116,8 +116,8 @@ static void Action_Start(void)
 {
     /* 临时测试：原有平移动作。 */
     SM_ChassisMove(0, 380, EVENT_NONE);        /* 先沿 Y 轴到中间点 */
-    SM_ChassisMove(500, 0, EVENT_NONE);        /* 再沿 X 轴到中间点 */
-    SM_ChassisMove(300, 000, EVENT_ARRIVED);     /* 到 QR 位 */
+    // SM_ChassisMove(500, 0, EVENT_NONE);        /* 再沿 X 轴到中间点 */
+    SM_ChassisMove(820, 000, EVENT_ARRIVED);     /* 到 QR 位 */
 
     /* 航向角闭环测试：相对陀螺仪软件零点转到 +90°。 */
     // Chassis_SendRotateCmd(90.0f, EVENT_NONE);
@@ -180,7 +180,7 @@ static void Action_MoveToRaw1(void)
     sm_material_sequence_event_sent = false;
     taskEXIT_CRITICAL();
 
-    SM_ChassisMove(800, 0, EVENT_ARRIVED);
+    SM_ChassisMove(1150, 0, EVENT_ARRIVED);
 #ifdef USE_GIMBAL
     /* 前往原料区途中将云台从内收位折到地图中间位。 */
     Gimbal_SetAngle(CONFIG_MAP_MATERIAL_POS_2_DEG);
@@ -199,9 +199,9 @@ static void Action_FetchRaw1(void)
 
 static void Action_MoveToRough1(void)
 {
-    SM_ChassisMove(-400, 0, EVENT_NONE);        /* 左移到主干道 */
+    SM_ChassisMove(-650, 0, EVENT_NONE);        /* 左移到主干道 */
     Chassis_SendRotateCmd(180.0f, EVENT_NONE);         /* 逆时针转180° (陀螺仪闭环) */
-    SM_ChassisMove(0, 1800, EVENT_ARRIVED);      /* 直行到粗加工区 */
+    SM_ChassisMove(0, -2050, EVENT_ARRIVED);      /* 直行到粗加工区 */
 }
 
 static void Action_PlaceRough1(void)
@@ -291,8 +291,9 @@ static void Action_PlaceRough1(void)
 
 static void Action_MoveToTemp1(void)
 {
-    SM_ChassisMove(-1000, 0, EVENT_NONE);
-    SM_ChassisMove(0, 1000, EVENT_ARRIVED);
+    SM_ChassisMove(-980, 0, EVENT_NONE);
+    Chassis_SendRotateCmd(90.0f, EVENT_NONE);
+    SM_ChassisMove(-1000, 0, EVENT_ARRIVED);
 }
 
 static void Action_PlaceTemp1(void)
@@ -345,8 +346,9 @@ static void Action_PlaceTemp1(void)
 
 static void Action_MoveToRaw2(void)
 {
-    SM_ChassisMove(0, 500, EVENT_NONE);
-    SM_ChassisMove(-500, 0, EVENT_ARRIVED);
+    SM_ChassisMove(-1150, 0, EVENT_NONE);
+    Chassis_SendRotateCmd(0.01f, EVENT_NONE);
+    SM_ChassisMove(-650, 0, EVENT_ARRIVED);
 }
 
 static void Action_FetchRaw2(void)
@@ -398,8 +400,9 @@ static void Action_FetchRaw2(void)
 
 static void Action_MoveToRough2(void)
 {
-    SM_ChassisMove(-400, 0, EVENT_NONE);
-    SM_ChassisMove(0, -1800, EVENT_ARRIVED);
+    SM_ChassisMove(-650, 0, EVENT_NONE);        /* 左移到主干道 */
+    Chassis_SendRotateCmd(180.0f, EVENT_NONE);         /* 逆时针转180° (陀螺仪闭环) */
+    SM_ChassisMove(0, -2050, EVENT_ARRIVED);      /* 直行到粗加工区 */
 }
 
 static void Action_PlaceRough2(void)
@@ -484,8 +487,9 @@ static void Action_PlaceRough2(void)
 
 static void Action_MoveToTemp2(void)
 {
-    SM_ChassisMove(1000, 0, EVENT_NONE);
-    SM_ChassisMove(0, -1000, EVENT_ARRIVED);
+    SM_ChassisMove(-980, 0, EVENT_NONE);
+    Chassis_SendRotateCmd(90.0f, EVENT_NONE);
+    SM_ChassisMove(-1000, 0, EVENT_ARRIVED);
 }
 
 static void Action_StackTemp2(void)
@@ -536,8 +540,8 @@ static void Action_StackTemp2(void)
 
 static void Action_ReturnStart(void)
 {
-    SM_ChassisMove(0, 800, EVENT_NONE);
-    SM_ChassisMove(-1600, 0, EVENT_ARRIVED);
+    SM_ChassisMove(0, 2300, EVENT_NONE);
+    SM_ChassisMove(-1200, 0, EVENT_ARRIVED);
 }
 
 /* ====================================================================== */
