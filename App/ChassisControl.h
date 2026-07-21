@@ -26,6 +26,7 @@ typedef enum {
     CHASSIS_VISION_AXIS_IDLE = 0,
     CHASSIS_VISION_AXIS_X,
     CHASSIS_VISION_AXIS_Y,
+    CHASSIS_VISION_AXIS_XY,
 } ChassisVisionAxis_t;
 
 /** 向底盘队列下发移动指令 (非阻塞), 移动完成后自动发 completion_event */

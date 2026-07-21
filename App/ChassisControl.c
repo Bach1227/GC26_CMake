@@ -356,7 +356,11 @@ static void request_vision_pickup_once(void)
 static bool execute_vision_adjust(void)
 {
     TickType_t last_wake = xTaskGetTickCount();
-    ChassisVisionAxis_t axis = CHASSIS_VISION_AXIS_X;
+    const bool simultaneous_mode =
+        CONFIG_VISION_ADJUST_MODE ==
+        CONFIG_VISION_ADJUST_MODE_SIMULTANEOUS;
+    ChassisVisionAxis_t axis = simultaneous_mode
+        ? CHASSIS_VISION_AXIS_XY : CHASSIS_VISION_AXIS_X;
     uint32_t last_feedback_sequence = 0U;
     uint32_t stable_start_tick = 0U;
     bool stable_timing = false;
@@ -423,24 +427,40 @@ static bool execute_vision_adjust(void)
             if (feedback_sequence != last_feedback_sequence) {
                 last_feedback_sequence = feedback_sequence;
 
-                float active_offset =
-                    (axis == CHASSIS_VISION_AXIS_X)
-                    ? (float)offset_x
-                    : (float)offset_y;
-                bool error_in_threshold =
-                    (fabsf(active_offset)
-                     <= CONFIG_VISION_ADJUST_DEADZONE);
+                bool x_in_threshold =
+                    fabsf((float)offset_x)
+                    <= CONFIG_VISION_ADJUST_DEADZONE;
+                bool y_in_threshold =
+                    fabsf((float)offset_y)
+                    <= CONFIG_VISION_ADJUST_DEADZONE;
+                bool finish_adjust = false;
 
-                if (error_in_threshold) {
-                    if (!stable_timing) {
-                        stable_start_tick = feedback_tick;
-                        stable_timing = true;
+                if (simultaneous_mode) {
+                    bool both_in_threshold =
+                        x_in_threshold && y_in_threshold;
+
+                    if (both_in_threshold) {
+                        if (!stable_timing) {
+                            stable_start_tick = feedback_tick;
+                            stable_timing = true;
+                        }
+                    } else {
+                        stable_timing = false;
                     }
-                } else {
-                    stable_timing = false;
-                }
 
-                if (axis == CHASSIS_VISION_AXIS_X) {
+                    finish_adjust = stable_timing &&
+                        (uint32_t)(now - stable_start_tick)
+                            >= CONFIG_VISION_ADJUST_STABLE_TIME_MS;
+                } else if (axis == CHASSIS_VISION_AXIS_X) {
+                    if (x_in_threshold) {
+                        if (!stable_timing) {
+                            stable_start_tick = feedback_tick;
+                            stable_timing = true;
+                        }
+                    } else {
+                        stable_timing = false;
+                    }
+
                     if (stable_timing &&
                         (uint32_t)(now - stable_start_tick)
                             >= CONFIG_VISION_ADJUST_STABLE_TIME_MS) {
@@ -450,9 +470,34 @@ static bool execute_vision_adjust(void)
                         PID_ClearUp_float(&vision_y_pid);
                         g_chassis_adjust_axis = axis;
                     }
-                } else if (stable_timing &&
-                           (uint32_t)(now - stable_start_tick)
-                               >= CONFIG_VISION_ADJUST_STABLE_TIME_MS) {
+                } else {
+                    if (!x_in_threshold) {
+                        /* Y 调整期间 X 漂出阈值，返回重新调整 X。 */
+                        axis = CHASSIS_VISION_AXIS_X;
+                        stable_timing = false;
+                        PID_ClearUp_float(&vision_x_pid);
+                        PID_ClearUp_float(&vision_y_pid);
+                        g_chassis_adjust_axis = axis;
+                    } else {
+                        bool both_in_threshold =
+                            x_in_threshold && y_in_threshold;
+
+                        if (both_in_threshold) {
+                            if (!stable_timing) {
+                                stable_start_tick = feedback_tick;
+                                stable_timing = true;
+                            }
+                        } else {
+                            stable_timing = false;
+                        }
+
+                        finish_adjust = stable_timing &&
+                            (uint32_t)(now - stable_start_tick)
+                                >= CONFIG_VISION_ADJUST_STABLE_TIME_MS;
+                    }
+                }
+
+                if (finish_adjust) {
                     completed = true;
                     taskENTER_CRITICAL();
                     g_chassis_adjust_heading_active = false;
@@ -463,7 +508,12 @@ static bool execute_vision_adjust(void)
                 }
             }
 
-            if (axis == CHASSIS_VISION_AXIS_X) {
+            if (simultaneous_mode) {
+                rpm_x = -CONFIG_CHASSIS_X_DIRECTION
+                      * PID_Update_float(&vision_x_pid, (float)offset_x);
+                rpm_y = -CONFIG_CHASSIS_Y_DIRECTION
+                      * PID_Update_float(&vision_y_pid, (float)offset_y);
+            } else if (axis == CHASSIS_VISION_AXIS_X) {
                 rpm_x = -CONFIG_CHASSIS_X_DIRECTION
                       * PID_Update_float(&vision_x_pid, (float)offset_x);
             } else {
@@ -652,7 +702,10 @@ static bool begin_vision_adjust(bool use_current_heading,
 #if CONFIG_USE_GIMBAL && CONFIG_VISION_ADJUST_ONLY && CONFIG_ENABLE_MATERIAL_PLACEMENT
     vision_pickup_requested = false;
 #endif
-    g_chassis_adjust_axis = CHASSIS_VISION_AXIS_X;
+    g_chassis_adjust_axis =
+        (CONFIG_VISION_ADJUST_MODE ==
+         CONFIG_VISION_ADJUST_MODE_SIMULTANEOUS)
+        ? CHASSIS_VISION_AXIS_XY : CHASSIS_VISION_AXIS_X;
     g_chassis_adjust_heading_active = true;
     taskEXIT_CRITICAL();
 
